@@ -7,6 +7,7 @@ import { motion, AnimatePresence } from "framer-motion"
 import { ChevronRight, Upload, X, Plus, Calendar, Users, Mail } from "lucide-react"
 import CalendarGrid from "../../components/calendar/calendar-grid"
 import useDragSelection from "../../hooks/useDragSelection"
+import { createInterviewEvent } from "../../lib/database"
 
 interface BasicInfo {
   eventName: string
@@ -64,14 +65,91 @@ export default function CreateInterviewPage() {
     endTime: "18:00",
   })
 
+  // 기본 마감일시: 현재 날짜로부터 3일 후 18:00
+  const getDefaultDeadline = () => {
+    const date = new Date()
+    date.setDate(date.getDate() + 3)
+    date.setHours(18, 0, 0, 0)
+    return date.toISOString().slice(0, 16) // YYYY-MM-DDTHH:MM 형식
+  }
+
   const [reviewSettings, setReviewSettings] = useState<ReviewSettings>({
-    deadline: "",
+    deadline: getDefaultDeadline(),
     reminderOptions: {
       oneDayBefore: true,
       threeHoursBefore: true,
       oneHourBefore: false,
     },
   })
+
+  const [sendOptions, setSendOptions] = useState({
+    sendEmail: true,
+    generateLink: false,
+  })
+
+  const [isCreating, setIsCreating] = useState(false)
+
+  // 면접 이벤트 생성 핸들러
+  const handleCreateInterviewEvent = async () => {
+    // 유효성 검사
+    if (!reviewSettings.deadline) {
+      alert("마감일시를 설정해주세요.")
+      return
+    }
+    if (candidates.length === 0) {
+      alert("최소 1명의 지원자를 등록해주세요.")
+      return
+    }
+    if (availableTimes.length === 0) {
+      alert("가용 시간을 설정해주세요.")
+      return
+    }
+
+    setIsCreating(true)
+
+    try {
+      const result = await createInterviewEvent({
+        eventName: basicInfo.eventName,
+        organizerEmail: basicInfo.organizerEmail,
+        interviewLength: Number(basicInfo.interviewLength),
+        simultaneousCount: Number(basicInfo.simultaneousCount),
+        deadline: new Date(reviewSettings.deadline),
+        reminderSettings: reviewSettings.reminderOptions,
+        sendOptions,
+        timeRange,
+        availableTimes,
+        candidates
+      })
+
+      if (result.success) {
+        const actions = []
+        if (sendOptions.sendEmail) {
+          actions.push("초대 이메일 발송")
+        }
+        if (sendOptions.generateLink && result.shareToken) {
+          actions.push("공유 링크 생성")
+        }
+
+        const actionText = actions.length > 0 ? actions.join(" 및 ") : "면접 이벤트 생성"
+        
+        alert(`${actionText}이 완료되었습니다!`)
+        
+        if (result.shareToken) {
+          console.log("공유 링크:", `${window.location.origin}/respond/${result.shareToken}`)
+        }
+
+        // 성공 후 대시보드로 이동 (추후 구현)
+        // router.push(`/events/${result.event.id}/dashboard`)
+      } else {
+        throw new Error(result.error || "면접 이벤트 생성에 실패했습니다.")
+      }
+    } catch (error) {
+      console.error("Error creating interview event:", error)
+      alert("면접 이벤트 생성 중 오류가 발생했습니다. 다시 시도해주세요.")
+    } finally {
+      setIsCreating(false)
+    }
+  }
 
   const generateTimeSlots = () => {
     const slots = []
@@ -761,7 +839,32 @@ export default function CreateInterviewPage() {
                     type="datetime-local"
                     value={reviewSettings.deadline}
                     onChange={(e) => setReviewSettings((prev) => ({ ...prev, deadline: e.target.value }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    min={new Date().toISOString().slice(0, 16)}
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white shadow-sm transition-all duration-200 hover:border-gray-400 focus:shadow-md text-gray-900 font-medium
+                      [&::-webkit-calendar-picker-indicator]:opacity-100 
+                      [&::-webkit-calendar-picker-indicator]:cursor-pointer
+                      [&::-webkit-calendar-picker-indicator]:rounded-lg
+                      [&::-webkit-calendar-picker-indicator]:p-2
+                      [&::-webkit-calendar-picker-indicator]:hover:bg-blue-50
+                      [&::-webkit-calendar-picker-indicator]:transition-colors
+                      [&::-webkit-datetime-edit]:text-gray-900
+                      [&::-webkit-datetime-edit-fields-wrapper]:gap-2
+                      [&::-webkit-datetime-edit-text]:text-gray-500
+                      [&::-webkit-datetime-edit-month-field]:bg-gray-50
+                      [&::-webkit-datetime-edit-month-field]:rounded
+                      [&::-webkit-datetime-edit-month-field]:px-1
+                      [&::-webkit-datetime-edit-day-field]:bg-gray-50
+                      [&::-webkit-datetime-edit-day-field]:rounded
+                      [&::-webkit-datetime-edit-day-field]:px-1
+                      [&::-webkit-datetime-edit-year-field]:bg-gray-50
+                      [&::-webkit-datetime-edit-year-field]:rounded
+                      [&::-webkit-datetime-edit-year-field]:px-1
+                      [&::-webkit-datetime-edit-hour-field]:bg-blue-50
+                      [&::-webkit-datetime-edit-hour-field]:rounded
+                      [&::-webkit-datetime-edit-hour-field]:px-1
+                      [&::-webkit-datetime-edit-minute-field]:bg-blue-50
+                      [&::-webkit-datetime-edit-minute-field]:rounded
+                      [&::-webkit-datetime-edit-minute-field]:px-1"
                   />
                 </div>
 
@@ -890,40 +993,32 @@ export default function CreateInterviewPage() {
                 </div>
               </div>
 
-              {/* Actions */}
+              {/* Send Options */}
               <div className="bg-white border border-gray-200 rounded-lg p-6">
                 <h3 className="text-lg font-semibold text-gray-900 mb-4">발송 옵션</h3>
                 <div className="space-y-3">
-                  <button
-                    onClick={() => {
-                      if (!reviewSettings.deadline) {
-                        alert("마감일시를 설정해주세요.")
-                        return
+                  <label className="flex items-center">
+                    <input
+                      type="checkbox"
+                      checked={sendOptions.sendEmail}
+                      onChange={(e) =>
+                        setSendOptions((prev) => ({ ...prev, sendEmail: e.target.checked }))
                       }
-                      alert("초대 메일이 발송되었습니다! (Mock)")
-                      console.log("Sending invitation emails to:", candidates)
-                      console.log("Deadline:", reviewSettings.deadline)
-                      console.log("Reminder options:", reviewSettings.reminderOptions)
-                    }}
-                    className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-4 rounded-lg transition-colors flex items-center justify-center gap-2"
-                  >
-                    <Mail className="w-4 h-4" />
-                    초대 메일 발송
-                  </button>
-                  <button
-                    onClick={() => {
-                      if (!reviewSettings.deadline) {
-                        alert("마감일시를 설정해주세요.")
-                        return
+                      className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    <span className="ml-2 text-sm text-gray-700">지원자에게 초대 이메일 발송</span>
+                  </label>
+                  <label className="flex items-center">
+                    <input
+                      type="checkbox"
+                      checked={sendOptions.generateLink}
+                      onChange={(e) =>
+                        setSendOptions((prev) => ({ ...prev, generateLink: e.target.checked }))
                       }
-                      const link = `${window.location.origin}/`
-                      navigator.clipboard.writeText(link)
-                      alert("링크가 클립보드에 복사되었습니다!")
-                    }}
-                    className="w-full bg-gray-600 hover:bg-gray-700 text-white font-medium py-3 px-4 rounded-lg transition-colors"
-                  >
-                    링크만 생성
-                  </button>
+                      className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    <span className="ml-2 text-sm text-gray-700">공유용 링크 생성 및 복사</span>
+                  </label>
                 </div>
               </div>
             </div>
@@ -934,6 +1029,13 @@ export default function CreateInterviewPage() {
                 className="px-6 py-3 border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition-colors"
               >
                 이전
+              </button>
+              <button
+                onClick={handleCreateInterviewEvent}
+                disabled={isCreating}
+                className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 disabled:cursor-not-allowed text-white font-medium py-3 px-4 rounded-lg transition-colors flex items-center justify-center gap-2"
+              >
+                {isCreating ? "생성 중..." : "면접 이벤트 생성"}
               </button>
             </div>
           </div>

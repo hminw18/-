@@ -1,9 +1,10 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { useParams } from "next/navigation"
-import { Mail, Edit, Trash2, CheckCircle, XCircle, ArrowLeft, Send, Settings } from "lucide-react"
+import { Mail, Edit, Trash2, CheckCircle, XCircle, ArrowLeft, Send, Settings, RefreshCw } from "lucide-react"
 import Link from "next/link"
+import { getInterviewEvent } from "../../../../lib/database"
 
 interface Candidate {
   id: string
@@ -11,23 +12,88 @@ interface Candidate {
   phone: string
   email: string
   hasResponded: boolean
-  selectedTimes: string[]
+  respondedAt?: string
+  selectedTimes: Array<{
+    date: string
+    startTime: string
+    endTime: string
+    preferenceOrder: number
+  }>
 }
 
 interface InterviewEvent {
   id: string
   eventName: string
   createdAt: Date
-  status: "collecting" | "closed" | "completed" | "scheduled" | "schedule failed"
+  status: "collecting" | "closed" | "completed" | "scheduled" | "failed"
   interviewLength: number
   simultaneousCount: number
   organizerEmail: string
   deadline: string
   candidates: Candidate[]
+  availableTimeSlots: Array<{
+    id: string
+    date: string
+    startTime: string
+    endTime: string
+  }>
   scheduledSlots?: { candidateId: string; time: string; date: string }[]
 }
 
-// Mock data
+// 실제 데이터베이스에서 이벤트 상세 정보 가져오기
+async function fetchEventDetails(eventId: string): Promise<InterviewEvent | null> {
+  try {
+    const result = await getInterviewEvent(eventId)
+    
+    if (!result.success || !result.event) {
+      return null
+    }
+
+    const dbEvent = result.event
+    
+    // 지원자 데이터 변환
+    const candidates: Candidate[] = dbEvent.candidates?.map(candidate => ({
+      id: candidate.id,
+      name: candidate.name,
+      phone: candidate.phone,
+      email: candidate.email,
+      hasResponded: candidate.has_responded,
+      respondedAt: candidate.responded_at,
+      selectedTimes: candidate.candidate_time_selections?.map(selection => ({
+        date: selection.selected_date,
+        startTime: selection.selected_start_time,
+        endTime: selection.selected_end_time,
+        preferenceOrder: selection.preference_order
+      })) || []
+    })) || []
+
+    // 가용 시간 슬롯 변환
+    const availableTimeSlots = dbEvent.available_time_slots?.map(slot => ({
+      id: slot.id,
+      date: slot.date,
+      startTime: slot.start_time,
+      endTime: slot.end_time
+    })) || []
+
+    return {
+      id: dbEvent.id,
+      eventName: dbEvent.event_name,
+      createdAt: new Date(dbEvent.created_at),
+      status: dbEvent.status as InterviewEvent['status'],
+      interviewLength: dbEvent.interview_length,
+      simultaneousCount: dbEvent.simultaneous_count,
+      organizerEmail: dbEvent.organizer_email,
+      deadline: dbEvent.deadline,
+      candidates,
+      availableTimeSlots
+    }
+  } catch (error) {
+    console.error('Error fetching event details:', error)
+    return null
+  }
+}
+
+// Mock data (fallback)
 const mockEventData: Record<string, InterviewEvent> = {
   "event-001": {
     id: "event-001",
@@ -237,7 +303,7 @@ const getStatusColor = (status: InterviewEvent["status"]) => {
       return "bg-green-100 text-green-800"
     case "completed":
       return "bg-purple-100 text-purple-800"
-    case "schedule failed":
+    case "failed":
       return "bg-red-100 text-red-800"
     default:
       return "bg-gray-100 text-gray-800"
@@ -254,7 +320,7 @@ const getStatusText = (status: InterviewEvent["status"]) => {
       return "일정 배정 완료"
     case "completed":
       return "면접 완료"
-    case "schedule failed":
+    case "failed":
       return "일정 배정 실패"
     default:
       return status
@@ -264,7 +330,45 @@ const getStatusText = (status: InterviewEvent["status"]) => {
 export default function EventDashboardPage() {
   const params = useParams()
   const eventId = params.eventid as string
-  const [event, setEvent] = useState<InterviewEvent | null>(mockEventData[eventId] || null)
+  const [event, setEvent] = useState<InterviewEvent | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const loadEventData = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const eventData = await fetchEventDetails(eventId)
+      if (eventData) {
+        setEvent(eventData)
+      } else {
+        // Fallback to mock data if no real data found
+        setEvent(mockEventData[eventId] || null)
+      }
+    } catch (err) {
+      console.error('Error loading event:', err)
+      setError('이벤트 데이터를 불러오는데 실패했습니다.')
+      // Try fallback to mock data
+      setEvent(mockEventData[eventId] || null)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadEventData()
+  }, [eventId])
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <RefreshCw className="w-8 h-8 text-gray-400 mx-auto mb-4 animate-spin" />
+          <p className="text-gray-600">이벤트 정보를 불러오는 중...</p>
+        </div>
+      </div>
+    )
+  }
 
   if (!event) {
     return (

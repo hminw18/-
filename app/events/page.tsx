@@ -1,46 +1,71 @@
 "use client"
 
-import { useState } from "react"
-import { Calendar, Clock, Users, ChevronRight, Plus } from "lucide-react"
+import { useState, useEffect } from "react"
+import { Calendar, Clock, Users, ChevronRight, Plus, RefreshCw } from "lucide-react"
 import Link from "next/link"
+import { supabase } from "../../lib/supabase"
 
 interface InterviewEvent {
   id: string
   eventName: string
   createdAt: Date
-  status: "collecting" | "closed" | "completed" | "scheduled" | "schedule failed"
+  status: "collecting" | "closed" | "completed" | "scheduled" | "failed"
   totalCandidates: number
   respondedCandidates: number
   interviewLength: number
   simultaneousCount: number
   organizerEmail: string
+  deadline: string
 }
 
-// Mock data
-const mockEvents: InterviewEvent[] = [
-  {
-    id: "event-001",
-    eventName: "프론트엔드 개발자 면접",
-    createdAt: new Date("2024-01-15T10:30:00"),
-    status: "collecting",
-    totalCandidates: 10,
-    respondedCandidates: 7,
-    interviewLength: 60,
-    simultaneousCount: 1,
-    organizerEmail: "hr@company.com",
-  },
-  {
-    id: "event-002",
-    eventName: "백엔드 개발자 면접",
-    createdAt: new Date("2024-01-10T14:20:00"),
-    status: "scheduled",
-    totalCandidates: 10,
-    respondedCandidates: 10,
-    interviewLength: 45,
-    simultaneousCount: 2,
-    organizerEmail: "tech@company.com",
-  },
-]
+// 실제 데이터베이스에서 이벤트 목록 가져오기
+async function fetchAllEvents(): Promise<InterviewEvent[]> {
+  try {
+    const { data: events, error: eventsError } = await supabase
+      .from('interview_events')
+      .select(`
+        id,
+        event_name,
+        organizer_email,
+        interview_length,
+        simultaneous_count,
+        deadline,
+        status,
+        created_at,
+        candidates!inner(
+          id,
+          has_responded
+        )
+      `)
+      .order('created_at', { ascending: false })
+
+    if (eventsError) throw eventsError
+
+    // 이벤트별 지원자 통계 계산
+    const processedEvents: InterviewEvent[] = events.map(event => {
+      const totalCandidates = event.candidates.length
+      const respondedCandidates = event.candidates.filter(candidate => candidate.has_responded).length
+
+      return {
+        id: event.id,
+        eventName: event.event_name,
+        createdAt: new Date(event.created_at),
+        status: event.status as InterviewEvent['status'],
+        totalCandidates,
+        respondedCandidates,
+        interviewLength: event.interview_length,
+        simultaneousCount: event.simultaneous_count,
+        organizerEmail: event.organizer_email,
+        deadline: event.deadline
+      }
+    })
+
+    return processedEvents
+  } catch (error) {
+    console.error('Error fetching events:', error)
+    return []
+  }
+}
 
 const getStatusColor = (status: InterviewEvent["status"]) => {
   switch (status) {
@@ -52,7 +77,7 @@ const getStatusColor = (status: InterviewEvent["status"]) => {
       return "bg-green-100 text-green-800"
     case "completed":
       return "bg-purple-100 text-purple-800"
-    case "schedule failed":
+    case "failed":
       return "bg-red-100 text-red-800"
     default:
       return "bg-gray-100 text-gray-800"
@@ -69,7 +94,7 @@ const getStatusText = (status: InterviewEvent["status"]) => {
       return "일정 배정 완료"
     case "completed":
       return "면접 완료"
-    case "schedule failed":
+    case "failed":
       return "일정 배정 실패"
     default:
       return status
@@ -77,7 +102,27 @@ const getStatusText = (status: InterviewEvent["status"]) => {
 }
 
 export default function EventsPage() {
-  const [events] = useState<InterviewEvent[]>(mockEvents)
+  const [events, setEvents] = useState<InterviewEvent[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const loadEvents = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const eventData = await fetchAllEvents()
+      setEvents(eventData)
+    } catch (err) {
+      setError('이벤트 목록을 불러오는데 실패했습니다.')
+      console.error('Error loading events:', err)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadEvents()
+  }, [])
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -86,12 +131,22 @@ export default function EventsPage() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
             <h1 className="text-xl font-semibold text-gray-900">면접 이벤트 관리</h1>
-            <Link
-              href="/create"
-              className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-            >
-              <Plus className="w-4 h-4" />새 이벤트 생성
-            </Link>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={loadEvents}
+                disabled={loading}
+                className="inline-flex items-center gap-2 px-3 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+              >
+                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+                새로고침
+              </button>
+              <Link
+                href="/create"
+                className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+              >
+                <Plus className="w-4 h-4" />새 이벤트 생성
+              </Link>
+            </div>
           </div>
         </div>
       </div>
@@ -103,7 +158,24 @@ export default function EventsPage() {
           <p className="text-gray-600">생성된 모든 면접 이벤트를 관리하세요.</p>
         </div>
 
-        {events.length === 0 ? (
+        {error && (
+          <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
+            <p className="text-red-800">{error}</p>
+            <button
+              onClick={loadEvents}
+              className="mt-2 text-red-600 hover:text-red-700 underline"
+            >
+              다시 시도
+            </button>
+          </div>
+        )}
+
+        {loading ? (
+          <div className="text-center py-12">
+            <RefreshCw className="w-8 h-8 text-gray-400 mx-auto mb-4 animate-spin" />
+            <p className="text-gray-600">이벤트 목록을 불러오는 중...</p>
+          </div>
+        ) : events.length === 0 ? (
           <div className="text-center py-12">
             <Calendar className="w-12 h-12 text-gray-400 mx-auto mb-4" />
             <h3 className="text-lg font-medium text-gray-900 mb-2">생성된 이벤트가 없습니다</h3>
