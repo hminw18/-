@@ -3,6 +3,7 @@
 import type React from "react"
 
 import { useState, useEffect } from "react"
+import { useRouter } from "next/navigation"
 import { motion, AnimatePresence } from "framer-motion"
 import { ChevronRight, Upload, X, Plus, Calendar, Users, Mail } from "lucide-react"
 import CalendarGrid from "../../components/calendar/calendar-grid"
@@ -49,6 +50,7 @@ interface ReviewSettings {
 type Step = "basic-info" | "available-times" | "candidates" | "review"
 
 export default function CreateInterviewPage() {
+  const router = useRouter()
   const [currentStep, setCurrentStep] = useState<Step>("basic-info")
   const [basicInfo, setBasicInfo] = useState<BasicInfo>({
     eventName: "",
@@ -130,16 +132,12 @@ export default function CreateInterviewPage() {
           actions.push("공유 링크 생성")
         }
 
-        const actionText = actions.length > 0 ? actions.join(" 및 ") : "면접 이벤트 생성"
-        
-        alert(`${actionText}이 완료되었습니다!`)
-        
         if (result.shareToken) {
           console.log("공유 링크:", `${window.location.origin}/respond/${result.shareToken}`)
         }
 
-        // 성공 후 대시보드로 이동 (추후 구현)
-        // router.push(`/events/${result.event.id}/dashboard`)
+        // 대시보드로 이동
+        router.push(`/events/${result.event.id}/dashboard`)
       } else {
         throw new Error(result.error || "면접 이벤트 생성에 실패했습니다.")
       }
