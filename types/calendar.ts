@@ -1,11 +1,18 @@
 export interface Experience {
   title: string
+  interviewLength?: number
+  availableTimeSlots?: any[]
   dates: { id: string; label: string; date: string; dateRange: string }[]
+  status?: string
+  deadline?: string
+  organizerEmail?: string
 }
 
 export interface TimeSlot {
   id: string
   time: string
+  startTime?: string
+  endTime?: string
 }
 
 export interface FormData {
@@ -16,6 +23,7 @@ export interface FormData {
 export interface IdentityData {
   name: string
   phone: string
+  candidateId?: string
 }
 
 export type ComponentState =

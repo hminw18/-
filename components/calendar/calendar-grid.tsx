@@ -2,13 +2,15 @@
 
 import { motion } from "framer-motion"
 import { ChevronLeft, ChevronRight } from "lucide-react"
-import { getDaysInMonth, getFirstDayOfMonth, isToday, isSameDay, isPastDate } from "../../utils/calendar"
+import { getDaysInMonth, getFirstDayOfMonth, isToday, isSameDay, isPastDate, formatDateForDB } from "../../utils/calendar"
 
 interface CalendarGridProps {
   currentMonth: Date
   selectedDates: Date[]
   onDateSelect: (date: Date) => void
   onMonthNavigate: (direction: "prev" | "next") => void
+  availableDates?: string[]
+  size?: 'normal' | 'compact'
 }
 
 export default function CalendarGrid({
@@ -16,19 +18,28 @@ export default function CalendarGrid({
   selectedDates,
   onDateSelect,
   onMonthNavigate,
+  availableDates = [],
+  size = 'normal'
 }: CalendarGridProps) {
+  const cellSize = size === 'compact' ? 'h-8 w-8' : 'h-12 w-12'
+  const textSize = size === 'compact' ? 'text-xs' : 'text-sm'
+  const containerHeight = size === 'compact' ? 'min-h-[350px]' : 'min-h-[500px]'
+  const padding = size === 'compact' ? 'p-4' : 'p-6'
+
   const renderCalendar = () => {
     const daysInMonth = getDaysInMonth(currentMonth)
     const firstDay = getFirstDayOfMonth(currentMonth)
     const days = []
 
     for (let i = 0; i < firstDay; i++) {
-      days.push(<div key={`empty-${i}`} className="h-7 w-7" />)
+      days.push(<div key={`empty-${i}`} className={cellSize} />)
     }
 
     for (let day = 1; day <= daysInMonth; day++) {
       const date = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), day)
-      const isDisabled = isPastDate(date)
+      const dateKey = formatDateForDB(date)
+      const isAvailable = availableDates.length === 0 || availableDates.includes(dateKey)
+      const isDisabled = isPastDate(date) || !isAvailable
       const isSelected = selectedDates.some((selectedDate) => isSameDay(selectedDate, date))
       const isTodayDate = isToday(date)
 
@@ -40,7 +51,7 @@ export default function CalendarGrid({
           onClick={() => onDateSelect(date)}
           whileHover={!isDisabled ? { scale: 1.05 } : {}}
           whileTap={!isDisabled ? { scale: 0.95 } : {}}
-          className={`h-7 w-7 rounded-md text-xs font-medium transition-colors ${
+          className={`${cellSize} rounded-md ${textSize} font-medium transition-colors ${
             isDisabled
               ? "text-gray-300 cursor-not-allowed"
               : isSelected
@@ -59,36 +70,36 @@ export default function CalendarGrid({
   }
 
   return (
-    <div className="flex-1 min-h-0 border border-gray-200 rounded-lg p-3 flex flex-col">
-      <div className="flex items-center justify-between mb-3 flex-shrink-0">
+    <div className={`border border-gray-200 rounded-lg ${padding} flex flex-col ${containerHeight}`}>
+      <div className="flex items-center justify-between mb-6 flex-shrink-0">
         <button
           type="button"
           onClick={() => onMonthNavigate("prev")}
-          className="p-1 hover:bg-gray-100 rounded-md transition-colors"
+          className="p-2 hover:bg-gray-100 rounded-md transition-colors"
         >
-          <ChevronLeft className="w-4 h-4" />
+          <ChevronLeft className="w-5 h-5" />
         </button>
-        <h4 className="text-sm font-medium">
+        <h4 className="text-lg font-semibold">
           {currentMonth.toLocaleDateString("en-US", { month: "long", year: "numeric" })}
         </h4>
         <button
           type="button"
           onClick={() => onMonthNavigate("next")}
-          className="p-1 hover:bg-gray-100 rounded-md transition-colors"
+          className="p-2 hover:bg-gray-100 rounded-md transition-colors"
         >
-          <ChevronRight className="w-4 h-4" />
+          <ChevronRight className="w-5 h-5" />
         </button>
       </div>
 
-      <div className="flex-1 min-h-0 flex flex-col">
-        <div className="grid grid-cols-7 gap-1 mb-2 flex-shrink-0">
+      <div className="flex-1 flex flex-col">
+        <div className="grid grid-cols-7 gap-2 mb-4 flex-shrink-0">
           {["S", "M", "T", "W", "T", "F", "S"].map((day, index) => (
-            <div key={index} className="h-6 flex items-center justify-center text-xs font-medium text-gray-500">
+            <div key={index} className={`${cellSize} flex items-center justify-center ${textSize} font-semibold text-gray-600`}>
               {day}
             </div>
           ))}
         </div>
-        <div className="grid grid-cols-7 gap-1 flex-1 content-start">{renderCalendar()}</div>
+        <div className="grid grid-cols-7 gap-2 auto-rows-fr">{renderCalendar()}</div>
       </div>
     </div>
   )

@@ -46,3 +46,17 @@ export const formatShortDate = (date: Date): string => {
     year: "numeric",
   })
 }
+
+// 타임존 문제 없이 날짜를 YYYY-MM-DD 형식으로 변환
+export const formatDateForDB = (date: Date): string => {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+// YYYY-MM-DD 형식의 문자열을 로컬 타임존의 Date 객체로 안전하게 변환
+export const parseDateFromDB = (dateString: string): Date => {
+  const [year, month, day] = dateString.split('-').map(Number)
+  return new Date(year, month - 1, day) // month는 0-based
+}

@@ -112,6 +112,9 @@ CREATE TABLE scheduled_interviews (
     scheduled_start_time TIME NOT NULL,
     scheduled_end_time TIME NOT NULL,
     
+    -- 세션 ID (동시 면접을 위한 그룹핑)
+    session_id VARCHAR(50) NOT NULL,
+    
     -- 상태 및 추가 정보
     status VARCHAR(20) NOT NULL DEFAULT 'scheduled' 
         CHECK (status IN ('scheduled', 'confirmed', 'completed', 'cancelled', 'no_show')),

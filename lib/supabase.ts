@@ -160,6 +160,7 @@ export type Database = {
           scheduled_date: string
           scheduled_start_time: string
           scheduled_end_time: string
+          session_id: string
           status: 'scheduled' | 'confirmed' | 'completed' | 'cancelled' | 'no_show'
           meeting_link: string | null
           meeting_room: string | null
@@ -176,6 +177,7 @@ export type Database = {
           scheduled_date: string
           scheduled_start_time: string
           scheduled_end_time: string
+          session_id: string
           status?: 'scheduled' | 'confirmed' | 'completed' | 'cancelled' | 'no_show'
           meeting_link?: string | null
           meeting_room?: string | null
@@ -192,6 +194,7 @@ export type Database = {
           scheduled_date?: string
           scheduled_start_time?: string
           scheduled_end_time?: string
+          session_id?: string
           status?: 'scheduled' | 'confirmed' | 'completed' | 'cancelled' | 'no_show'
           meeting_link?: string | null
           meeting_room?: string | null

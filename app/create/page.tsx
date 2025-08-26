@@ -6,9 +6,13 @@ import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { motion, AnimatePresence } from "framer-motion"
 import { ChevronRight, Upload, X, Plus, Calendar, Users, Mail } from "lucide-react"
+import toast from 'react-hot-toast'
 import CalendarGrid from "../../components/calendar/calendar-grid"
 import useDragSelection from "../../hooks/useDragSelection"
 import { createInterviewEvent } from "../../lib/database"
+import ProtectedRoute from "../../components/auth/ProtectedRoute"
+import { useAuth } from "../../contexts/AuthContext"
+import AppHeader from "../../components/ui/app-header"
 
 interface BasicInfo {
   eventName: string
@@ -51,12 +55,19 @@ type Step = "basic-info" | "available-times" | "candidates" | "review"
 
 export default function CreateInterviewPage() {
   const router = useRouter()
+  const { user } = useAuth()
   const [currentStep, setCurrentStep] = useState<Step>("basic-info")
   const [basicInfo, setBasicInfo] = useState<BasicInfo>({
     eventName: "",
     interviewLength: 30,
     simultaneousCount: 1,
     organizerEmail: "",
+  })
+  const [touched, setTouched] = useState({
+    eventName: false,
+    interviewLength: false,
+    simultaneousCount: false,
+    organizerEmail: false,
   })
   const [availableTimes, setAvailableTimes] = useState<AvailableTime[]>([])
   const [selectedDate, setSelectedDate] = useState<Date | null>(null)
@@ -67,12 +78,47 @@ export default function CreateInterviewPage() {
     endTime: "18:00",
   })
 
-  // 기본 마감일시: 현재 날짜로부터 3일 후 18:00
-  const getDefaultDeadline = () => {
-    const date = new Date()
-    date.setDate(date.getDate() + 3)
-    date.setHours(18, 0, 0, 0)
-    return date.toISOString().slice(0, 16) // YYYY-MM-DDTHH:MM 형식
+  // 기본 마감일시: 현재 날짜로부터 3일 후 18:00 또는 실제 면접일자가 3일 뒤보다 이르면 그 전날 18:00
+  const getDefaultDeadline = (currentAvailableTimes = availableTimes) => {
+    const today = new Date()
+    const defaultDate = new Date()
+    defaultDate.setDate(today.getDate() + 3)
+    
+    // 로컬 시간으로 18시 설정 (UTC 변환 방지)
+    const year = defaultDate.getFullYear()
+    const month = String(defaultDate.getMonth() + 1).padStart(2, '0')
+    const day = String(defaultDate.getDate()).padStart(2, '0')
+    const defaultDeadlineString = `${year}-${month}-${day}T18:00`
+    
+    // 가장 빠른 면접 날짜 찾기
+    if (currentAvailableTimes.length > 0) {
+      const earliestInterviewDate = currentAvailableTimes
+        .map(time => time.date)
+        .sort((a, b) => a.getTime() - b.getTime())[0]
+      
+      // 가장 빠른 면접 날짜가 기본 마감일(3일 후)보다 이르면, 면접일 전날 18:00로 설정
+      if (earliestInterviewDate < defaultDate) {
+        const deadlineDate = new Date(earliestInterviewDate)
+        deadlineDate.setDate(deadlineDate.getDate() - 1)
+        
+        const deadlineYear = deadlineDate.getFullYear()
+        const deadlineMonth = String(deadlineDate.getMonth() + 1).padStart(2, '0')
+        const deadlineDay = String(deadlineDate.getDate()).padStart(2, '0')
+        const calculatedDeadlineString = `${deadlineYear}-${deadlineMonth}-${deadlineDay}T18:00`
+        
+        // 마감일이 오늘보다 이전이면 오늘 18:00으로 설정
+        if (deadlineDate <= today) {
+          const todayYear = today.getFullYear()
+          const todayMonth = String(today.getMonth() + 1).padStart(2, '0')
+          const todayDay = String(today.getDate()).padStart(2, '0')
+          return `${todayYear}-${todayMonth}-${todayDay}T18:00`
+        }
+        
+        return calculatedDeadlineString
+      }
+    }
+    
+    return defaultDeadlineString
   }
 
   const [reviewSettings, setReviewSettings] = useState<ReviewSettings>({
@@ -86,24 +132,126 @@ export default function CreateInterviewPage() {
 
   const [sendOptions, setSendOptions] = useState({
     sendEmail: true,
-    generateLink: false,
+    generateLink: true,
   })
 
   const [isCreating, setIsCreating] = useState(false)
 
+  // 사용자 로그인 정보로 기본값 설정
+  useEffect(() => {
+    if (user?.email && !basicInfo.organizerEmail) {
+      setBasicInfo(prev => ({
+        ...prev,
+        organizerEmail: user.email
+      }))
+    }
+  }, [user, basicInfo.organizerEmail])
+
+  // 면접 시간이 변경될 때마다 마감일시 업데이트
+  useEffect(() => {
+    setReviewSettings(prev => ({
+      ...prev,
+      deadline: getDefaultDeadline(availableTimes)
+    }))
+  }, [availableTimes])
+
+  // 지원자 정보 검증 함수
+  const validateCandidates = (): boolean => {
+    if (candidates.length === 0) {
+      toast.error("최소 1명의 지원자를 등록해주세요.")
+      return false
+    }
+    
+    for (let i = 0; i < candidates.length; i++) {
+      const candidate = candidates[i]
+      
+      if (!candidate.name.trim()) {
+        toast.error(`${i + 1}번째 지원자의 이름을 입력해주세요.`)
+        return false
+      }
+      
+      if (candidate.name.trim().length < 2) {
+        toast.error(`${i + 1}번째 지원자의 이름은 2글자 이상이어야 합니다.`)
+        return false
+      }
+      
+      if (!candidate.email.trim()) {
+        toast.error(`${i + 1}번째 지원자의 이메일을 입력해주세요.`)
+        return false
+      }
+      
+      if (!validateEmail(candidate.email.trim())) {
+        toast.error(`${i + 1}번째 지원자의 이메일 형식이 올바르지 않습니다.`)
+        return false
+      }
+      
+      if (candidate.phone.trim() && !validatePhone(candidate.phone.trim())) {
+        toast.error(`${i + 1}번째 지원자의 전화번호 형식이 올바르지 않습니다. (예: 010-1234-5678)`)
+        return false
+      }
+    }
+    
+    // 중복 이메일 검사
+    const emails = candidates.map(c => c.email.trim().toLowerCase())
+    const uniqueEmails = new Set(emails)
+    if (emails.length !== uniqueEmails.size) {
+      toast.error("중복된 이메일 주소가 있습니다.")
+      return false
+    }
+    
+    return true
+  }
+
+  // 가용 시간 검증 함수
+  const validateAvailableTimes = (): boolean => {
+    if (availableTimes.length === 0) {
+      toast.error("가용 시간을 설정해주세요.")
+      return false
+    }
+    
+    const hasEmptySlots = availableTimes.some(time => time.slots.length === 0)
+    if (hasEmptySlots) {
+      toast.error("모든 선택된 날짜에 시간을 설정해주세요.")
+      return false
+    }
+    
+    return true
+  }
+
+  // 마감일시 검증 함수
+  const validateDeadline = (): boolean => {
+    if (!reviewSettings.deadline) {
+      toast.error("마감일시를 설정해주세요.")
+      return false
+    }
+    
+    const deadlineDate = new Date(reviewSettings.deadline)
+    const now = new Date()
+    
+    if (deadlineDate <= now) {
+      toast.error("마감일시는 현재 시점보다 미래여야 합니다.")
+      return false
+    }
+    
+    // 가장 빠른 면접 날짜 확인
+    const earliestInterviewDate = Math.min(...availableTimes.map(time => time.date.getTime()))
+    if (deadlineDate.getTime() >= earliestInterviewDate) {
+      toast.error("마감일시는 면접 날짜보다 이전이어야 합니다.")
+      return false
+    }
+    
+    return true
+  }
+
+  // 종합 검증 함수
+  const validateAll = (): boolean => {
+    return validateBasicInfo() && validateAvailableTimes() && validateCandidates() && validateDeadline()
+  }
+
   // 면접 이벤트 생성 핸들러
   const handleCreateInterviewEvent = async () => {
-    // 유효성 검사
-    if (!reviewSettings.deadline) {
-      alert("마감일시를 설정해주세요.")
-      return
-    }
-    if (candidates.length === 0) {
-      alert("최소 1명의 지원자를 등록해주세요.")
-      return
-    }
-    if (availableTimes.length === 0) {
-      alert("가용 시간을 설정해주세요.")
+    // 종합 유효성 검사
+    if (!validateAll()) {
       return
     }
 
@@ -143,7 +291,7 @@ export default function CreateInterviewPage() {
       }
     } catch (error) {
       console.error("Error creating interview event:", error)
-      alert("면접 이벤트 생성 중 오류가 발생했습니다. 다시 시도해주세요.")
+      toast.error("면접 이벤트 생성 중 오류가 발생했습니다. 다시 시도해주세요.")
     } finally {
       setIsCreating(false)
     }
@@ -228,9 +376,59 @@ export default function CreateInterviewPage() {
     isTimeSlotSelected,
   })
 
+  // 이메일 형식 검증 함수
+  const validateEmail = (email: string): boolean => {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    return emailRegex.test(email)
+  }
+
+  // 전화번호 형식 검증 함수 (한국 전화번호)
+  const validatePhone = (phone: string): boolean => {
+    const phoneRegex = /^01[016789]-?\d{3,4}-?\d{4}$/
+    return phoneRegex.test(phone.replace(/\s/g, ''))
+  }
+
+  // 기본 정보 검증 함수 (토스트 없이 boolean만 반환)
+  const validateBasicInfo = (): boolean => {
+    if (!basicInfo.eventName.trim()) {
+      return false
+    }
+    
+    if (basicInfo.eventName.trim().length < 2) {
+      return false
+    }
+    
+    if (!basicInfo.organizerEmail.trim()) {
+      return false
+    }
+    
+    if (!validateEmail(basicInfo.organizerEmail.trim())) {
+      return false
+    }
+    
+    const interviewLength = Number(basicInfo.interviewLength)
+    if (!interviewLength || interviewLength < 15) {
+      return false
+    }
+    
+    if (interviewLength > 300) {
+      return false
+    }
+    
+    const simultaneousCount = Number(basicInfo.simultaneousCount)
+    if (!simultaneousCount || simultaneousCount < 1) {
+      return false
+    }
+    
+    if (simultaneousCount > 50) {
+      return false
+    }
+    
+    return true
+  }
+
   const handleBasicInfoSubmit = () => {
-    if (!basicInfo.eventName || !basicInfo.organizerEmail) {
-      alert("모든 필수 항목을 입력해주세요.")
+    if (!validateBasicInfo()) {
       return
     }
     setCurrentStep("available-times")
@@ -452,10 +650,24 @@ export default function CreateInterviewPage() {
                 <input
                   type="text"
                   value={basicInfo.eventName}
-                  onChange={(e) => setBasicInfo((prev) => ({ ...prev, eventName: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  onChange={(e) => {
+                    setBasicInfo((prev) => ({ ...prev, eventName: e.target.value }))
+                    setTouched((prev) => ({ ...prev, eventName: true }))
+                  }}
+                  onBlur={() => setTouched((prev) => ({ ...prev, eventName: true }))}
+                  className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${
+                    touched.eventName && (!basicInfo.eventName.trim() || (basicInfo.eventName.trim() && basicInfo.eventName.trim().length < 2))
+                      ? 'border-red-300 bg-red-50' 
+                      : 'border-gray-300'
+                  }`}
                   placeholder="학부대학 CES 실리콘밸리 면접"
                 />
+                {touched.eventName && !basicInfo.eventName.trim() && (
+                  <p className="mt-1 text-sm text-red-600">이벤트명을 입력해주세요.</p>
+                )}
+                {touched.eventName && basicInfo.eventName.trim() && basicInfo.eventName.trim().length < 2 && (
+                  <p className="mt-1 text-sm text-red-600">이벤트명은 2글자 이상이어야 합니다.</p>
+                )}
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -480,10 +692,20 @@ export default function CreateInterviewPage() {
                         setBasicInfo((prev) => ({ ...prev, interviewLength: 20 }))
                       }
                     }}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${
+                      basicInfo.interviewLength && (Number(basicInfo.interviewLength) < 15 || Number(basicInfo.interviewLength) > 300)
+                        ? 'border-red-300 bg-red-50'
+                        : 'border-gray-300'
+                    }`}
                     min="15"
                     step="15"
                   />
+                  {basicInfo.interviewLength && Number(basicInfo.interviewLength) < 15 && (
+                    <p className="mt-1 text-sm text-red-600">면접 길이는 15분 이상이어야 합니다.</p>
+                  )}
+                  {basicInfo.interviewLength && Number(basicInfo.interviewLength) > 300 && (
+                    <p className="mt-1 text-sm text-red-600">면접 길이는 300분을 초과할 수 없습니다.</p>
+                  )}
                 </div>
 
                 <div>
@@ -507,9 +729,19 @@ export default function CreateInterviewPage() {
                         setBasicInfo((prev) => ({ ...prev, simultaneousCount: 1 }))
                       }
                     }}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${
+                      basicInfo.simultaneousCount && (Number(basicInfo.simultaneousCount) < 1 || Number(basicInfo.simultaneousCount) > 50)
+                        ? 'border-red-300 bg-red-50'
+                        : 'border-gray-300'
+                    }`}
                     min="1"
                   />
+                  {basicInfo.simultaneousCount && Number(basicInfo.simultaneousCount) < 1 && (
+                    <p className="mt-1 text-sm text-red-600">동시 인원은 1명 이상이어야 합니다.</p>
+                  )}
+                  {basicInfo.simultaneousCount && Number(basicInfo.simultaneousCount) > 50 && (
+                    <p className="mt-1 text-sm text-red-600">동시 인원은 50명을 초과할 수 없습니다.</p>
+                  )}
                 </div>
               </div>
 
@@ -518,10 +750,24 @@ export default function CreateInterviewPage() {
                 <input
                   type="email"
                   value={basicInfo.organizerEmail}
-                  onChange={(e) => setBasicInfo((prev) => ({ ...prev, organizerEmail: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                  placeholder="organizer@company.com"
+                  onChange={(e) => {
+                    setBasicInfo((prev) => ({ ...prev, organizerEmail: e.target.value }))
+                    setTouched((prev) => ({ ...prev, organizerEmail: true }))
+                  }}
+                  onBlur={() => setTouched((prev) => ({ ...prev, organizerEmail: true }))}
+                  className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${
+                    touched.organizerEmail && (!basicInfo.organizerEmail.trim() || (basicInfo.organizerEmail.trim() && !validateEmail(basicInfo.organizerEmail.trim())))
+                      ? 'border-red-300 bg-red-50'
+                      : 'border-gray-300'
+                  }`}
+                  placeholder="주최자 이메일 (자동 입력됨)"
                 />
+                {touched.organizerEmail && !basicInfo.organizerEmail.trim() && (
+                  <p className="mt-1 text-sm text-red-600">주최자 이메일을 입력해주세요.</p>
+                )}
+                {touched.organizerEmail && basicInfo.organizerEmail.trim() && !validateEmail(basicInfo.organizerEmail.trim()) && (
+                  <p className="mt-1 text-sm text-red-600">올바른 이메일 형식을 입력해주세요.</p>
+                )}
               </div>
             </div>
 
@@ -551,6 +797,7 @@ export default function CreateInterviewPage() {
                   selectedDates={availableTimes.map((time) => time.date)}
                   onDateSelect={handleDateSelect}
                   onMonthNavigate={handleMonthNavigate}
+                  size="compact"
                 />
 
                 <div className="mt-6 p-4 bg-gray-50 rounded-lg">
@@ -718,7 +965,12 @@ export default function CreateInterviewPage() {
                 이전
               </button>
               <button
-                onClick={() => setCurrentStep("candidates")}
+                onClick={() => {
+                  if (!validateAvailableTimes()) {
+                    return
+                  }
+                  setCurrentStep("candidates")
+                }}
                 disabled={availableTimes.length === 0}
                 className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white font-medium py-3 px-4 rounded-lg transition-colors"
               >
@@ -768,34 +1020,63 @@ export default function CreateInterviewPage() {
               ) : (
                 <div className="space-y-4">
                   {candidates.map((candidate, index) => (
-                    <div key={index} className="grid grid-cols-1 md:grid-cols-4 gap-4 p-4 bg-gray-50 rounded-lg">
-                      <input
-                        type="text"
-                        placeholder="이름"
-                        value={candidate.name}
-                        onChange={(e) => updateCandidate(index, "name", e.target.value)}
-                        className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                      />
-                      <input
-                        type="tel"
-                        placeholder="전화번호"
-                        value={candidate.phone}
-                        onChange={(e) => updateCandidate(index, "phone", e.target.value)}
-                        className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                      />
-                      <input
-                        type="email"
-                        placeholder="이메일"
-                        value={candidate.email}
-                        onChange={(e) => updateCandidate(index, "email", e.target.value)}
-                        className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                      />
-                      <button
-                        onClick={() => removeCandidate(index)}
-                        className="flex items-center justify-center px-3 py-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
+                    <div key={index} className="p-4 bg-gray-50 rounded-lg space-y-3">
+                      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                        <div>
+                          <input
+                            type="text"
+                            placeholder="이름 *"
+                            value={candidate.name}
+                            onChange={(e) => updateCandidate(index, "name", e.target.value)}
+                            className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${
+                              candidate.name.trim() && candidate.name.trim().length < 2
+                                ? 'border-red-300 bg-red-50'
+                                : 'border-gray-300 bg-white'
+                            }`}
+                          />
+                          {candidate.name.trim() && candidate.name.trim().length < 2 && (
+                            <p className="mt-1 text-xs text-red-600">2글자 이상 입력해주세요.</p>
+                          )}
+                        </div>
+                        <div>
+                          <input
+                            type="tel"
+                            placeholder="전화번호 (선택)"
+                            value={candidate.phone}
+                            onChange={(e) => updateCandidate(index, "phone", e.target.value)}
+                            className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${
+                              candidate.phone.trim() && !validatePhone(candidate.phone.trim())
+                                ? 'border-red-300 bg-red-50'
+                                : 'border-gray-300 bg-white'
+                            }`}
+                          />
+                          {candidate.phone.trim() && !validatePhone(candidate.phone.trim()) && (
+                            <p className="mt-1 text-xs text-red-600">올바른 전화번호 형식을 입력해주세요. (예: 010-1234-5678)</p>
+                          )}
+                        </div>
+                        <div>
+                          <input
+                            type="email"
+                            placeholder="이메일 *"
+                            value={candidate.email}
+                            onChange={(e) => updateCandidate(index, "email", e.target.value)}
+                            className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${
+                              candidate.email.trim() && !validateEmail(candidate.email.trim())
+                                ? 'border-red-300 bg-red-50'
+                                : 'border-gray-300 bg-white'
+                            }`}
+                          />
+                          {candidate.email.trim() && !validateEmail(candidate.email.trim()) && (
+                            <p className="mt-1 text-xs text-red-600">올바른 이메일 형식을 입력해주세요.</p>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => removeCandidate(index)}
+                          className="flex items-center justify-center px-3 py-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors h-fit"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -810,7 +1091,12 @@ export default function CreateInterviewPage() {
                 이전
               </button>
               <button
-                onClick={() => setCurrentStep("review")}
+                onClick={() => {
+                  if (!validateCandidates()) {
+                    return
+                  }
+                  setCurrentStep("review")
+                }}
                 disabled={candidates.length === 0}
                 className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white font-medium py-3 px-4 rounded-lg transition-colors"
               >
@@ -838,7 +1124,7 @@ export default function CreateInterviewPage() {
                     value={reviewSettings.deadline}
                     onChange={(e) => setReviewSettings((prev) => ({ ...prev, deadline: e.target.value }))}
                     min={new Date().toISOString().slice(0, 16)}
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white shadow-sm transition-all duration-200 hover:border-gray-400 focus:shadow-md text-gray-900 font-medium
+                    className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white shadow-sm transition-all duration-200 hover:border-gray-400 focus:shadow-md text-gray-900 font-medium
                       [&::-webkit-calendar-picker-indicator]:opacity-100 
                       [&::-webkit-calendar-picker-indicator]:cursor-pointer
                       [&::-webkit-calendar-picker-indicator]:rounded-lg
@@ -862,8 +1148,22 @@ export default function CreateInterviewPage() {
                       [&::-webkit-datetime-edit-hour-field]:px-1
                       [&::-webkit-datetime-edit-minute-field]:bg-blue-50
                       [&::-webkit-datetime-edit-minute-field]:rounded
-                      [&::-webkit-datetime-edit-minute-field]:px-1"
+                      [&::-webkit-datetime-edit-minute-field]:px-1 ${
+                      reviewSettings.deadline && new Date(reviewSettings.deadline) <= new Date()
+                        ? 'border-red-300 bg-red-50'
+                        : 'border-gray-300'
+                    }`}
                   />
+                  {reviewSettings.deadline && new Date(reviewSettings.deadline) <= new Date() && (
+                    <p className="mt-1 text-sm text-red-600">마감일시는 현재 시점보다 미래여야 합니다.</p>
+                  )}
+                  {reviewSettings.deadline && availableTimes.length > 0 && (() => {
+                    const deadlineDate = new Date(reviewSettings.deadline)
+                    const earliestInterviewDate = Math.min(...availableTimes.map(time => time.date.getTime()))
+                    return deadlineDate.getTime() >= earliestInterviewDate && (
+                      <p className="mt-1 text-sm text-red-600">마감일시는 면접 날짜보다 이전이어야 합니다.</p>
+                    )
+                  })()}
                 </div>
 
                 <div>
@@ -1056,11 +1356,11 @@ export default function CreateInterviewPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <ProtectedRoute>
+      <div className="min-h-screen bg-gray-50">
       {/* Header */}
-      <div className="bg-white border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
+      <AppHeader>
+        <div className="flex items-center justify-between w-full">
             <h1 className="text-xl font-semibold text-gray-900">면접 일정 생성</h1>
 
             {/* Step Indicator */}
@@ -1091,9 +1391,8 @@ export default function CreateInterviewPage() {
                 </div>
               ))}
             </div>
-          </div>
         </div>
-      </div>
+      </AppHeader>
 
       {/* Main Content */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -1110,5 +1409,6 @@ export default function CreateInterviewPage() {
         </AnimatePresence>
       </div>
     </div>
+    </ProtectedRoute>
   )
 }

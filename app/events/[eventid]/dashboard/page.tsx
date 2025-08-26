@@ -2,9 +2,16 @@
 
 import { useState, useEffect } from "react"
 import { useParams } from "next/navigation"
-import { Mail, Edit, Trash2, CheckCircle, XCircle, ArrowLeft, Send, Settings, RefreshCw } from "lucide-react"
+import { Mail, Edit, Trash2, CheckCircle, XCircle, ArrowLeft, Send, Settings, RefreshCw, Copy, Link as LinkIcon } from "lucide-react"
 import Link from "next/link"
-import { getInterviewEvent } from "../../../../lib/database"
+import toast from 'react-hot-toast'
+import { getInterviewEvent, closeInterviewEvent, deleteInterviewEvent, generateInterviewSchedule, getScheduledInterviews } from "../../../../lib/database"
+import ProtectedRoute from "../../../../components/auth/ProtectedRoute"
+import { useAuth } from "../../../../contexts/AuthContext"
+import { parseDateFromDB } from "../../../../utils/calendar"
+import EditEventModal from "../../../../components/ui/edit-event-modal"
+import ConfirmationDialog from "../../../../components/ui/confirmation-dialog"
+import AppHeader from "../../../../components/ui/app-header"
 
 interface Candidate {
   id: string
@@ -30,6 +37,7 @@ interface InterviewEvent {
   simultaneousCount: number
   organizerEmail: string
   deadline: string
+  shareToken?: string
   candidates: Candidate[]
   availableTimeSlots: Array<{
     id: string
@@ -52,28 +60,48 @@ async function fetchEventDetails(eventId: string): Promise<InterviewEvent | null
     const dbEvent = result.event
     
     // 지원자 데이터 변환
-    const candidates: Candidate[] = dbEvent.candidates?.map(candidate => ({
-      id: candidate.id,
-      name: candidate.name,
-      phone: candidate.phone,
-      email: candidate.email,
-      hasResponded: candidate.has_responded,
-      respondedAt: candidate.responded_at,
-      selectedTimes: candidate.candidate_time_selections?.map(selection => ({
-        date: selection.selected_date,
-        startTime: selection.selected_start_time,
-        endTime: selection.selected_end_time,
-        preferenceOrder: selection.preference_order
-      })) || []
-    })) || []
+    const candidates: Candidate[] = dbEvent.candidates?.map(candidate => {
+      console.log('Processing candidate:', candidate.name, 'selections:', candidate.candidate_time_selections)
+      return {
+        id: candidate.id,
+        name: candidate.name,
+        phone: candidate.phone,
+        email: candidate.email,
+        hasResponded: candidate.has_responded,
+        respondedAt: candidate.responded_at,
+        selectedTimes: candidate.candidate_time_selections?.map(selection => {
+          console.log('Processing selection:', selection)
+          return {
+            date: selection.selected_date,
+            startTime: selection.selected_start_time,
+            endTime: selection.selected_end_time,
+            preferenceOrder: selection.preference_order
+          }
+        }).sort((a, b) => {
+          // 먼저 날짜로 정렬
+          const dateComparison = new Date(a.date).getTime() - new Date(b.date).getTime()
+          if (dateComparison !== 0) return dateComparison
+          
+          // 같은 날짜라면 시작 시간으로 정렬
+          return a.startTime.localeCompare(b.startTime)
+        }) || []
+      }
+    }) || []
 
-    // 가용 시간 슬롯 변환
+    // 가용 시간 슬롯 변환 및 정렬
     const availableTimeSlots = dbEvent.available_time_slots?.map(slot => ({
       id: slot.id,
       date: slot.date,
       startTime: slot.start_time,
       endTime: slot.end_time
-    })) || []
+    })).sort((a, b) => {
+      // 먼저 날짜로 정렬
+      const dateComparison = new Date(a.date).getTime() - new Date(b.date).getTime()
+      if (dateComparison !== 0) return dateComparison
+      
+      // 같은 날짜라면 시작 시간으로 정렬
+      return a.startTime.localeCompare(b.startTime)
+    }) || []
 
     return {
       id: dbEvent.id,
@@ -84,6 +112,7 @@ async function fetchEventDetails(eventId: string): Promise<InterviewEvent | null
       simultaneousCount: dbEvent.simultaneous_count,
       organizerEmail: dbEvent.organizer_email,
       deadline: dbEvent.deadline,
+      shareToken: dbEvent.share_token,
       candidates,
       availableTimeSlots
     }
@@ -93,205 +122,6 @@ async function fetchEventDetails(eventId: string): Promise<InterviewEvent | null
   }
 }
 
-// Mock data (fallback)
-const mockEventData: Record<string, InterviewEvent> = {
-  "event-001": {
-    id: "event-001",
-    eventName: "프론트엔드 개발자 면접",
-    createdAt: new Date("2024-01-15T10:30:00"),
-    status: "collecting",
-    interviewLength: 60,
-    simultaneousCount: 1,
-    organizerEmail: "hr@company.com",
-    deadline: "2024-01-25T18:00:00",
-    candidates: [
-      {
-        id: "c1",
-        name: "김철수",
-        phone: "010-1234-5678",
-        email: "kim@example.com",
-        hasResponded: true,
-        selectedTimes: ["2024-01-26 09:00-10:00", "2024-01-26 14:00-15:00", "2024-01-27 10:00-11:00"],
-      },
-      {
-        id: "c2",
-        name: "이영희",
-        phone: "010-2345-6789",
-        email: "lee@example.com",
-        hasResponded: true,
-        selectedTimes: ["2024-01-26 10:00-11:00", "2024-01-27 09:00-10:00"],
-      },
-      {
-        id: "c3",
-        name: "박민수",
-        phone: "010-3456-7890",
-        email: "park@example.com",
-        hasResponded: false,
-        selectedTimes: [],
-      },
-      {
-        id: "c4",
-        name: "정수진",
-        phone: "010-4567-8901",
-        email: "jung@example.com",
-        hasResponded: true,
-        selectedTimes: ["2024-01-26 15:00-16:00", "2024-01-27 14:00-15:00"],
-      },
-      {
-        id: "c5",
-        name: "최동욱",
-        phone: "010-5678-9012",
-        email: "choi@example.com",
-        hasResponded: false,
-        selectedTimes: [],
-      },
-      {
-        id: "c6",
-        name: "한지민",
-        phone: "010-6789-0123",
-        email: "han@example.com",
-        hasResponded: true,
-        selectedTimes: ["2024-01-26 11:00-12:00", "2024-01-27 15:00-16:00"],
-      },
-      {
-        id: "c7",
-        name: "윤서준",
-        phone: "010-7890-1234",
-        email: "yoon@example.com",
-        hasResponded: true,
-        selectedTimes: ["2024-01-26 13:00-14:00"],
-      },
-      {
-        id: "c8",
-        name: "강민지",
-        phone: "010-8901-2345",
-        email: "kang@example.com",
-        hasResponded: false,
-        selectedTimes: [],
-      },
-      {
-        id: "c9",
-        name: "임태현",
-        phone: "010-9012-3456",
-        email: "lim@example.com",
-        hasResponded: true,
-        selectedTimes: ["2024-01-27 11:00-12:00", "2024-01-27 16:00-17:00"],
-      },
-      {
-        id: "c10",
-        name: "송하은",
-        phone: "010-0123-4567",
-        email: "song@example.com",
-        hasResponded: true,
-        selectedTimes: ["2024-01-26 16:00-17:00", "2024-01-27 13:00-14:00"],
-      },
-    ],
-  },
-  "event-002": {
-    id: "event-002",
-    eventName: "백엔드 개발자 면접",
-    createdAt: new Date("2024-01-10T14:20:00"),
-    status: "scheduled",
-    interviewLength: 45,
-    simultaneousCount: 2,
-    organizerEmail: "tech@company.com",
-    deadline: "2024-01-20T18:00:00",
-    candidates: [
-      {
-        id: "c11",
-        name: "김개발",
-        phone: "010-1111-1111",
-        email: "dev1@example.com",
-        hasResponded: true,
-        selectedTimes: ["2024-01-22 09:00-09:45", "2024-01-22 14:00-14:45"],
-      },
-      {
-        id: "c12",
-        name: "이코딩",
-        phone: "010-2222-2222",
-        email: "dev2@example.com",
-        hasResponded: true,
-        selectedTimes: ["2024-01-22 10:00-10:45", "2024-01-23 09:00-09:45"],
-      },
-      {
-        id: "c13",
-        name: "박프로그래밍",
-        phone: "010-3333-3333",
-        email: "dev3@example.com",
-        hasResponded: true,
-        selectedTimes: ["2024-01-22 11:00-11:45"],
-      },
-      {
-        id: "c14",
-        name: "정알고리즘",
-        phone: "010-4444-4444",
-        email: "dev4@example.com",
-        hasResponded: true,
-        selectedTimes: ["2024-01-22 15:00-15:45", "2024-01-23 10:00-10:45"],
-      },
-      {
-        id: "c15",
-        name: "최데이터베이스",
-        phone: "010-5555-5555",
-        email: "dev5@example.com",
-        hasResponded: true,
-        selectedTimes: ["2024-01-22 16:00-16:45", "2024-01-23 11:00-11:45"],
-      },
-      {
-        id: "c16",
-        name: "한서버",
-        phone: "010-6666-6666",
-        email: "dev6@example.com",
-        hasResponded: true,
-        selectedTimes: ["2024-01-23 14:00-14:45"],
-      },
-      {
-        id: "c17",
-        name: "윤클라우드",
-        phone: "010-7777-7777",
-        email: "dev7@example.com",
-        hasResponded: true,
-        selectedTimes: ["2024-01-23 15:00-15:45", "2024-01-23 16:00-16:45"],
-      },
-      {
-        id: "c18",
-        name: "강마이크로서비스",
-        phone: "010-8888-8888",
-        email: "dev8@example.com",
-        hasResponded: true,
-        selectedTimes: ["2024-01-22 13:00-13:45"],
-      },
-      {
-        id: "c19",
-        name: "임도커",
-        phone: "010-9999-9999",
-        email: "dev9@example.com",
-        hasResponded: true,
-        selectedTimes: ["2024-01-23 12:00-12:45", "2024-01-23 13:00-13:45"],
-      },
-      {
-        id: "c20",
-        name: "송쿠버네티스",
-        phone: "010-0000-0000",
-        email: "dev10@example.com",
-        hasResponded: true,
-        selectedTimes: ["2024-01-22 12:00-12:45"],
-      },
-    ],
-    scheduledSlots: [
-      { candidateId: "c11", time: "09:00-09:45", date: "2024-01-22" },
-      { candidateId: "c12", time: "10:00-10:45", date: "2024-01-22" },
-      { candidateId: "c13", time: "11:00-11:45", date: "2024-01-22" },
-      { candidateId: "c18", time: "13:00-13:45", date: "2024-01-22" },
-      { candidateId: "c20", time: "12:00-12:45", date: "2024-01-22" },
-      { candidateId: "c14", time: "15:00-15:45", date: "2024-01-22" },
-      { candidateId: "c15", time: "16:00-16:45", date: "2024-01-22" },
-      { candidateId: "c16", time: "14:00-14:45", date: "2024-01-23" },
-      { candidateId: "c17", time: "15:00-15:45", date: "2024-01-23" },
-      { candidateId: "c19", time: "12:00-12:45", date: "2024-01-23" },
-    ],
-  },
-}
 
 const getStatusColor = (status: InterviewEvent["status"]) => {
   switch (status) {
@@ -333,6 +163,11 @@ export default function EventDashboardPage() {
   const [event, setEvent] = useState<InterviewEvent | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [showEditModal, setShowEditModal] = useState(false)
+  const [showCloseDialog, setShowCloseDialog] = useState(false)
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false)
+  const [scheduledInterviews, setScheduledInterviews] = useState<any[]>([])
+  const [isGeneratingSchedule, setIsGeneratingSchedule] = useState(false)
 
   const loadEventData = async () => {
     setLoading(true)
@@ -341,15 +176,22 @@ export default function EventDashboardPage() {
       const eventData = await fetchEventDetails(eventId)
       if (eventData) {
         setEvent(eventData)
+        
+        // 스케줄이 생성된 이벤트라면 스케줄 데이터도 로드
+        if (eventData.status === 'scheduled') {
+          const scheduleResult = await getScheduledInterviews(eventId)
+          if (scheduleResult.success) {
+            setScheduledInterviews(scheduleResult.data)
+          }
+        }
       } else {
-        // Fallback to mock data if no real data found
-        setEvent(mockEventData[eventId] || null)
+        setError('이벤트를 찾을 수 없습니다.')
+        setEvent(null)
       }
     } catch (err) {
       console.error('Error loading event:', err)
       setError('이벤트 데이터를 불러오는데 실패했습니다.')
-      // Try fallback to mock data
-      setEvent(mockEventData[eventId] || null)
+      setEvent(null)
     } finally {
       setLoading(false)
     }
@@ -391,47 +233,150 @@ export default function EventDashboardPage() {
   const respondedCandidates = event.candidates.filter((c) => c.hasResponded)
   const unrespondedCandidates = event.candidates.filter((c) => !c.hasResponded)
 
-  const handleAutoSchedule = () => {
+  const handleAutoSchedule = async () => {
     if (event.status !== "closed") {
-      alert("마감된 이벤트만 일정 배정이 가능합니다.")
+      toast.error("마감된 이벤트만 일정 배정이 가능합니다.")
       return
     }
-    // Mock auto scheduling
-    alert("일정 자동 배정이 완료되었습니다! (Mock)")
-    setEvent((prev) => (prev ? { ...prev, status: "scheduled" } : null))
+
+    const respondedCount = event.candidates.filter(c => c.hasResponded).length
+    if (respondedCount === 0) {
+      toast.error("응답한 지원자가 없어 스케줄을 생성할 수 없습니다.")
+      return
+    }
+
+    setIsGeneratingSchedule(true)
+    try {
+      const result = await generateInterviewSchedule(eventId)
+      
+      if (result.success) {
+        const { scheduledCandidates, unscheduledCandidates, utilizationRate, totalSessions } = result.result
+        
+        toast.success(
+          `일정 자동 배정 완료!\n` +
+          `배정: ${scheduledCandidates}명, 미배정: ${unscheduledCandidates}명\n` +
+          `총 ${totalSessions}개 세션, 배정률: ${Math.round(utilizationRate * 100)}%`
+        )
+        
+        setEvent((prev) => (prev ? { ...prev, status: "scheduled" } : null))
+        loadEventData()
+      } else {
+        toast.error(`일정 배정 실패: ${result.error}`)
+      }
+    } catch (error) {
+      console.error('Error generating schedule:', error)
+      toast.error('일정 배정 중 오류가 발생했습니다.')
+    } finally {
+      setIsGeneratingSchedule(false)
+    }
   }
 
   const handleSendReminder = (type: "all" | "unresponded" | string) => {
     if (type === "all") {
-      alert(`모든 지원자 ${event.candidates.length}명에게 리마인드를 발송했습니다! (Mock)`)
+      toast.success(`모든 지원자 ${event.candidates.length}명에게 리마인드를 발송했습니다! (Mock)`)
     } else if (type === "unresponded") {
-      alert(`미응답 지원자 ${unrespondedCandidates.length}명에게 리마인드를 발송했습니다! (Mock)`)
+      toast.success(`미응답 지원자 ${unrespondedCandidates.length}명에게 리마인드를 발송했습니다! (Mock)`)
     } else {
       const candidate = event.candidates.find((c) => c.id === type)
-      alert(`${candidate?.name}님에게 리마인드를 발송했습니다! (Mock)`)
+      toast.success(`${candidate?.name}님에게 리마인드를 발송했습니다! (Mock)`)
     }
   }
 
-  const handleCloseEvent = () => {
-    if (confirm("이벤트를 마감하시겠습니까? 마감 후에는 지원자가 응답할 수 없습니다.")) {
-      setEvent((prev) => (prev ? { ...prev, status: "closed" } : null))
-      alert("이벤트가 마감되었습니다.")
+
+  const handleCopyShareLink = async () => {
+    if (!event?.shareToken) {
+      toast.error("공유 링크가 없습니다. 이벤트 설정을 확인해주세요.")
+      return
+    }
+
+    const shareLink = `${window.location.origin}/respond/${event.shareToken}`
+    
+    try {
+      await navigator.clipboard.writeText(shareLink)
+      toast.success("공유 링크가 클립보드에 복사되었습니다!")
+    } catch (err) {
+      // Fallback for older browsers
+      const textArea = document.createElement("textarea")
+      textArea.value = shareLink
+      document.body.appendChild(textArea)
+      textArea.focus()
+      textArea.select()
+      
+      try {
+        document.execCommand('copy')
+        toast.success("공유 링크가 클립보드에 복사되었습니다!")
+      } catch (fallbackErr) {
+        toast.error("링크 복사에 실패했습니다. 수동으로 복사해주세요: " + shareLink)
+      }
+      
+      document.body.removeChild(textArea)
     }
   }
 
-  const handleDeleteEvent = () => {
-    if (confirm("이벤트를 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.")) {
-      alert("이벤트가 삭제되었습니다! (Mock)")
-      // In real app, redirect to events list
+  const handleGenerateSchedule = async () => {
+    if (!event) return
+
+    const respondedCount = event.candidates.filter(c => c.hasResponded).length
+    if (respondedCount === 0) {
+      toast.error("응답한 지원자가 없어 스케줄을 생성할 수 없습니다.")
+      return
     }
+
+    setIsGeneratingSchedule(true)
+    try {
+      const result = await generateInterviewSchedule(eventId)
+      
+      if (result.success) {
+        const { scheduledCandidates, unscheduledCandidates, utilizationRate, totalSessions } = result.result
+        
+        toast.success(
+          `스케줄 생성 완료!\n` +
+          `배정: ${scheduledCandidates}명, 미배정: ${unscheduledCandidates}명\n` +
+          `총 ${totalSessions}개 세션, 배정률: ${Math.round(utilizationRate * 100)}%`
+        )
+        
+        // 상태 업데이트 및 데이터 새로고침
+        setEvent((prev) => (prev ? { ...prev, status: "scheduled" } : null))
+        loadEventData()
+      } else {
+        toast.error(`스케줄 생성 실패: ${result.error}`)
+      }
+    } catch (error) {
+      console.error('Error generating schedule:', error)
+      toast.error('스케줄 생성 중 오류가 발생했습니다.')
+    } finally {
+      setIsGeneratingSchedule(false)
+    }
+  }
+
+  const handleCloseEvent = async () => {
+    const result = await closeInterviewEvent(eventId)
+    if (result.success) {
+      toast.success("이벤트가 마감되었습니다!")
+      loadEventData() // 데이터 새로고침
+    } else {
+      toast.error("이벤트 마감에 실패했습니다: " + result.error)
+    }
+    setShowCloseDialog(false)
+  }
+
+  const handleDeleteEvent = async () => {
+    const result = await deleteInterviewEvent(eventId)
+    if (result.success) {
+      toast.success("이벤트가 삭제되었습니다!")
+      window.location.href = '/events' // 이벤트 목록으로 이동
+    } else {
+      toast.error("이벤트 삭제에 실패했습니다: " + result.error)
+    }
+    setShowDeleteDialog(false)
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <ProtectedRoute>
+      <div className="min-h-screen bg-gray-50">
       {/* Header */}
-      <div className="bg-white border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
+      <AppHeader>
+        <div className="flex items-center justify-between w-full">
             <div className="flex items-center gap-4">
               <Link
                 href="/events"
@@ -451,7 +396,7 @@ export default function EventDashboardPage() {
 
             <div className="flex items-center gap-2">
               <button
-                onClick={() => alert("이벤트 수정 기능 (Mock)")}
+                onClick={() => setShowEditModal(true)}
                 className="inline-flex items-center gap-2 px-3 py-2 text-gray-600 hover:text-gray-900 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
               >
                 <Edit className="w-4 h-4" />
@@ -459,7 +404,7 @@ export default function EventDashboardPage() {
               </button>
               {event.status === "collecting" && (
                 <button
-                  onClick={handleCloseEvent}
+                  onClick={() => setShowCloseDialog(true)}
                   className="inline-flex items-center gap-2 px-3 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors"
                 >
                   <Settings className="w-4 h-4" />
@@ -467,16 +412,15 @@ export default function EventDashboardPage() {
                 </button>
               )}
               <button
-                onClick={handleDeleteEvent}
+                onClick={() => setShowDeleteDialog(true)}
                 className="inline-flex items-center gap-2 px-3 py-2 text-red-600 hover:text-red-900 border border-red-300 rounded-lg hover:bg-red-50 transition-colors"
               >
                 <Trash2 className="w-4 h-4" />
                 삭제
               </button>
             </div>
-          </div>
         </div>
-      </div>
+      </AppHeader>
 
       {/* Main Content */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -555,12 +499,29 @@ export default function EventDashboardPage() {
               {event.status === "closed" && !event.scheduledSlots && (
                 <button
                   onClick={handleAutoSchedule}
-                  className="w-full bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center justify-center gap-2"
+                  disabled={isGeneratingSchedule}
+                  className="w-full bg-green-600 hover:bg-green-700 disabled:bg-green-400 text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center justify-center gap-2"
                 >
-                  <CheckCircle className="w-4 h-4" />
-                  일정 자동 배정
+                  {isGeneratingSchedule ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      일정 배정 중...
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle className="w-4 h-4" />
+                      일정 자동 배정
+                    </>
+                  )}
                 </button>
               )}
+              <button
+                onClick={handleCopyShareLink}
+                className="w-full bg-purple-600 hover:bg-purple-700 text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center justify-center gap-2"
+              >
+                <LinkIcon className="w-4 h-4" />
+                링크 복사
+              </button>
               <button
                 onClick={() => handleSendReminder("unresponded")}
                 disabled={unrespondedCandidates.length === 0}
@@ -581,13 +542,16 @@ export default function EventDashboardPage() {
         </div>
 
         {/* Scheduled Results */}
-        {event.scheduledSlots && event.scheduledSlots.length > 0 && (
+        {event.status === 'scheduled' && scheduledInterviews.length > 0 && (
           <div className="mt-8 bg-white border border-gray-200 rounded-lg p-6">
             <h3 className="text-lg font-semibold text-gray-900 mb-4">배정된 일정</h3>
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead className="bg-gray-50">
                   <tr>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      세션 ID
+                    </th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       지원자
                     </th>
@@ -603,23 +567,28 @@ export default function EventDashboardPage() {
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {event.scheduledSlots.map((slot, index) => {
-                    const candidate = event.candidates.find((c) => c.id === slot.candidateId)
-                    return (
-                      <tr key={index}>
-                        <td className="px-4 py-4 whitespace-nowrap">
-                          <div className="font-medium text-gray-900">{candidate?.name}</div>
-                        </td>
-                        <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-600">
-                          {new Date(slot.date).toLocaleDateString("ko-KR")}
-                        </td>
-                        <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-600">{slot.time}</td>
-                        <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-600">
-                          <div>{candidate?.email}</div>
-                          <div className="text-xs text-gray-500">{candidate?.phone}</div>
-                        </td>
-                      </tr>
-                    )
+                  {scheduledInterviews.map((interview, index) => (
+                    <tr key={index}>
+                      <td className="px-4 py-4 whitespace-nowrap">
+                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                          {interview.session_id}
+                        </span>
+                      </td>
+                      <td className="px-4 py-4 whitespace-nowrap">
+                        <div className="font-medium text-gray-900">{interview.candidates?.name}</div>
+                      </td>
+                      <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-600">
+                        {new Date(interview.scheduled_date).toLocaleDateString("ko-KR")}
+                      </td>
+                      <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-600">
+                        {interview.scheduled_start_time} - {interview.scheduled_end_time}
+                      </td>
+                      <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-600">
+                        <div>{interview.candidates?.email}</div>
+                        <div className="text-xs text-gray-500">{interview.candidates?.phone}</div>
+                      </td>
+                    </tr>
+                  ))
                   })}
                 </tbody>
               </table>
@@ -676,7 +645,7 @@ export default function EventDashboardPage() {
                         <div className="space-y-1">
                           {candidate.selectedTimes.map((time, index) => (
                             <div key={index} className="text-xs text-gray-600 bg-gray-100 px-2 py-1 rounded">
-                              {time}
+                              {time.date} {time.startTime}-{time.endTime}
                             </div>
                           ))}
                         </div>
@@ -698,7 +667,47 @@ export default function EventDashboardPage() {
             </table>
           </div>
         </div>
+
+        {/* Edit Modal */}
+        {event && (
+          <EditEventModal
+            isOpen={showEditModal}
+            onClose={() => setShowEditModal(false)}
+            onSuccess={loadEventData}
+            event={{
+              id: event.id,
+              eventName: event.eventName,
+              interviewLength: event.interviewLength,
+              simultaneousCount: event.simultaneousCount,
+              deadline: event.deadline
+            }}
+          />
+        )}
+
+        {/* Close Confirmation Dialog */}
+        <ConfirmationDialog
+          isOpen={showCloseDialog}
+          onClose={() => setShowCloseDialog(false)}
+          onConfirm={handleCloseEvent}
+          title="이벤트 마감"
+          message="이벤트를 마감하시겠습니까? 마감 후에는 새로운 응답을 받을 수 없습니다."
+          confirmText="마감하기"
+          cancelText="취소"
+        />
+
+        {/* Delete Confirmation Dialog */}
+        <ConfirmationDialog
+          isOpen={showDeleteDialog}
+          onClose={() => setShowDeleteDialog(false)}
+          onConfirm={handleDeleteEvent}
+          title="이벤트 삭제"
+          message="이벤트를 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다."
+          confirmText="삭제하기"
+          cancelText="취소"
+          destructive
+        />
       </div>
     </div>
+    </ProtectedRoute>
   )
 }

@@ -1,33 +1,51 @@
 "use client"
 
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { Calendar, Users, Clock, CheckCircle, ArrowRight, Zap, Shield } from "lucide-react"
+import { useAuth } from "../contexts/AuthContext"
+import LoginButton from "../components/auth/LoginButton"
+import AppHeader from "../components/ui/app-header"
 
 export default function LandingPage() {
+  const { user, loading, signInWithGoogle } = useAuth()
+  const router = useRouter()
+
+  const handleGetStartedClick = () => {
+    if (user) {
+      router.push('/create')
+    } else {
+      signInWithGoogle()
+    }
+  }
+
   return (
     <div className="min-h-screen bg-white">
-      {/* Header */}
-      <header className="border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center py-6">
-            <div className="flex items-center space-x-2">
-              <Calendar className="w-8 h-8 text-blue-600" />
-              <span className="text-2xl font-bold text-gray-900">InterviewSync</span>
-            </div>
-            <nav className="hidden md:flex space-x-8">
-              <Link href="/events" className="text-gray-600 hover:text-gray-900 font-medium">
-                Dashboard
-              </Link>
-              <Link
-                href="/create"
-                className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors"
-              >
-                Create Event
-              </Link>
-            </nav>
+      <AppHeader>
+        <div className="flex justify-between items-center w-full">
+          <div className="flex items-center space-x-2">
+            <Calendar className="w-8 h-8 text-blue-600" />
+            <span className="text-2xl font-bold text-gray-900">InterviewSync</span>
           </div>
+          <nav className="hidden md:flex items-center space-x-4">
+            {user ? (
+              <>
+                <Link href="/events" className="text-gray-600 hover:text-gray-900 font-medium">
+                  Dashboard
+                </Link>
+                <Link
+                  href="/create"
+                  className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+                >
+                  Create Event
+                </Link>
+              </>
+            ) : (
+              <LoginButton />
+            )}
+          </nav>
         </div>
-      </header>
+      </AppHeader>
 
       {/* Hero Section */}
       <section className="py-20 bg-gradient-to-br from-blue-50 to-white">
@@ -39,13 +57,23 @@ export default function LandingPage() {
               automatically find the perfect time slots.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
-              <Link
-                href="/create"
-                className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 rounded-lg font-semibold text-lg transition-all duration-200 hover:shadow-lg flex items-center justify-center"
+              <button
+                onClick={handleGetStartedClick}
+                disabled={loading}
+                className="bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white px-8 py-4 rounded-lg font-semibold text-lg transition-all duration-200 hover:shadow-lg flex items-center justify-center"
               >
-                Get Started Today
-                <ArrowRight className="w-5 h-5 ml-2" />
-              </Link>
+                {loading ? (
+                  <>
+                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin mr-2" />
+                    Loading...
+                  </>
+                ) : (
+                  <>
+                    Get Started Today
+                    <ArrowRight className="w-5 h-5 ml-2" />
+                  </>
+                )}
+              </button>
               <Link
                 href="/events"
                 className="border border-gray-300 hover:border-gray-400 text-gray-700 px-8 py-4 rounded-lg font-semibold text-lg transition-colors"
@@ -173,13 +201,23 @@ export default function LandingPage() {
           <p className="text-xl text-blue-100 mb-8">
             Join thousands of companies already using InterviewSync to streamline their hiring.
           </p>
-          <Link
-            href="/create"
-            className="bg-white hover:bg-gray-100 text-blue-600 px-8 py-4 rounded-lg font-semibold text-lg transition-colors inline-flex items-center"
+          <button
+            onClick={handleGetStartedClick}
+            disabled={loading}
+            className="bg-white hover:bg-gray-100 disabled:bg-gray-200 text-blue-600 px-8 py-4 rounded-lg font-semibold text-lg transition-colors inline-flex items-center"
           >
-            Start Creating Events
-            <ArrowRight className="w-5 h-5 ml-2" />
-          </Link>
+            {loading ? (
+              <>
+                <div className="w-5 h-5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mr-2" />
+                Loading...
+              </>
+            ) : (
+              <>
+                Start Creating Events
+                <ArrowRight className="w-5 h-5 ml-2" />
+              </>
+            )}
+          </button>
         </div>
       </section>
 

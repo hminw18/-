@@ -4,16 +4,21 @@ import { motion } from "framer-motion"
 import type { TimeSlot } from "../../types/calendar"
 import { formatDate } from "../../utils/calendar"
 
-interface SuccessStateProps {
-  selectedCalendarDate: Date | null
-  selectedSlot: string
-  timeSlots: TimeSlot[]
-  onScheduleAnother: () => void
+interface SelectedTimeSlot {
+  date: Date
+  slotId: string
+  time: string
+  startTime: string
+  endTime: string
 }
 
-export default function SuccessState({ selectedCalendarDate, selectedSlot, timeSlots }: SuccessStateProps) {
-  const selectedTimeSlot = timeSlots.find((slot) => slot.id === selectedSlot)
+interface SuccessStateProps {
+  selectedTimeSlots: SelectedTimeSlot[]
+  onScheduleAnother: () => void
+  onEdit?: () => void
+}
 
+export default function SuccessState({ selectedTimeSlots, onEdit }: SuccessStateProps) {
   return (
     <div className="text-center px-4">
       <motion.div
@@ -26,18 +31,35 @@ export default function SuccessState({ selectedCalendarDate, selectedSlot, timeS
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
         </svg>
       </motion.div>
-      <h3 className="text-lg font-semibold text-gray-900 mb-3">Meeting Scheduled!</h3>
+      <h3 className="text-lg font-semibold text-gray-900 mb-3">시간 선택이 완료되었습니다!</h3>
       <p className="text-sm text-gray-600 mb-4 leading-relaxed">
-        A confirmation email with meeting details and calendar invite will be sent to you shortly.
+        선택한 시간이 성공적으로 저장되었습니다. 면접 일정이 확정되면 알림을 받게 됩니다.
       </p>
-      <div className="bg-gray-50 rounded-lg p-4 text-left text-sm space-y-2">
-        <p className="text-gray-700">
-          <strong>Date:</strong> {selectedCalendarDate && formatDate(selectedCalendarDate)}
-        </p>
-        <p className="text-gray-700">
-          <strong>Time:</strong> {selectedTimeSlot?.time}
-        </p>
+      <div className="bg-gray-50 rounded-lg p-4 text-left text-sm space-y-3">
+        <p className="text-gray-700 font-medium mb-2">선택한 시간:</p>
+        {selectedTimeSlots.map((slot, index) => (
+          <div key={index} className="space-y-1">
+            <p className="text-gray-700">
+              <strong>날짜:</strong> {formatDate(slot.date)}
+            </p>
+            <p className="text-gray-700">
+              <strong>시간:</strong> {slot.startTime} - {slot.endTime}
+            </p>
+            {index < selectedTimeSlots.length - 1 && <hr className="my-2" />}
+          </div>
+        ))}
       </div>
+      
+      {onEdit && (
+        <div className="mt-6">
+          <button
+            onClick={onEdit}
+            className="px-6 py-2 text-blue-600 border border-blue-600 rounded-lg hover:bg-blue-50 transition-colors"
+          >
+            응답 수정하기
+          </button>
+        </div>
+      )}
     </div>
   )
 }

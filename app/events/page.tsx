@@ -4,6 +4,9 @@ import { useState, useEffect } from "react"
 import { Calendar, Clock, Users, ChevronRight, Plus, RefreshCw } from "lucide-react"
 import Link from "next/link"
 import { supabase } from "../../lib/supabase"
+import ProtectedRoute from "../../components/auth/ProtectedRoute"
+import { useAuth } from "../../contexts/AuthContext"
+import AppHeader from "../../components/ui/app-header"
 
 interface InterviewEvent {
   id: string
@@ -19,7 +22,8 @@ interface InterviewEvent {
 }
 
 // 실제 데이터베이스에서 이벤트 목록 가져오기
-async function fetchAllEvents(): Promise<InterviewEvent[]> {
+// 현재 사용자의 이벤트만 가져오기
+async function fetchUserEvents(userId: string): Promise<InterviewEvent[]> {
   try {
     const { data: events, error: eventsError } = await supabase
       .from('interview_events')
@@ -37,6 +41,7 @@ async function fetchAllEvents(): Promise<InterviewEvent[]> {
           has_responded
         )
       `)
+      .eq('user_id', userId)
       .order('created_at', { ascending: false })
 
     if (eventsError) throw eventsError
@@ -102,15 +107,18 @@ const getStatusText = (status: InterviewEvent["status"]) => {
 }
 
 export default function EventsPage() {
+  const { user } = useAuth()
   const [events, setEvents] = useState<InterviewEvent[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   const loadEvents = async () => {
+    if (!user) return
+    
     setLoading(true)
     setError(null)
     try {
-      const eventData = await fetchAllEvents()
+      const eventData = await fetchUserEvents(user.id)
       setEvents(eventData)
     } catch (err) {
       setError('이벤트 목록을 불러오는데 실패했습니다.')
@@ -121,15 +129,17 @@ export default function EventsPage() {
   }
 
   useEffect(() => {
-    loadEvents()
-  }, [])
+    if (user) {
+      loadEvents()
+    }
+  }, [user])
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <ProtectedRoute>
+      <div className="min-h-screen bg-gray-50">
       {/* Header */}
-      <div className="bg-white border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
+      <AppHeader>
+        <div className="flex items-center justify-between w-full">
             <h1 className="text-xl font-semibold text-gray-900">면접 이벤트 관리</h1>
             <div className="flex items-center gap-3">
               <button
@@ -147,9 +157,8 @@ export default function EventsPage() {
                 <Plus className="w-4 h-4" />새 이벤트 생성
               </Link>
             </div>
-          </div>
         </div>
-      </div>
+      </AppHeader>
 
       {/* Main Content */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -251,5 +260,6 @@ export default function EventsPage() {
         )}
       </div>
     </div>
+    </ProtectedRoute>
   )
 }
