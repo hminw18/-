@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { Check, Crown, Star, Mail, MessageSquare, Users, Calendar, ArrowRight, CreditCard, AlertCircle } from 'lucide-react'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { Suspense } from 'react'
 import ProtectedRoute from '../../components/auth/ProtectedRoute'
 import AppHeader from '../../components/ui/app-header'
 import { useAuth } from '../../contexts/AuthContext'
@@ -12,10 +12,8 @@ import PaymentModal from '../../components/payment/PaymentModal'
 import { supabase } from '../../lib/supabase'
 import toast from 'react-hot-toast'
 
-export default function AccountPage() {
+function AccountPageContent() {
   const { user } = useAuth()
-  // const router = useRouter()
-  // const searchParams = useSearchParams()
   const [userPlan, setUserPlan] = useState(() => getUserPlan())
   const [showUpgrade, setShowUpgrade] = useState(false)
   const [showPaymentModal, setShowPaymentModal] = useState(false)
@@ -69,6 +67,20 @@ export default function AccountPage() {
       checkRealPlanStatus()
     }
   }, [user])
+
+  // 이메일 설정 초기화 로직
+  useEffect(() => {
+    const currentFromEmail = emailSettings.fromEmail
+    if (currentFromEmail.includes('@')) {
+      const prefix = currentFromEmail.split('@')[0]
+      // 상태 업데이트 함수를 사용하여 UI와 상태를 동기화
+      setEmailSettings(prev => ({...prev, fromEmail: prefix}))
+    } else if (!currentFromEmail) {
+      setEmailSettings(prev => ({...prev, fromEmail: 'noreply'}))
+    }
+    // 이펙트는 마운트 시 한 번만 실행
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // URL 파라미터에서 결제 결과 확인
   // useEffect(() => {
@@ -132,7 +144,36 @@ export default function AccountPage() {
     const newSettings = { ...emailSettings, [field]: value }
     setEmailSettings(newSettings)
     saveUserEmailSettings(newSettings)
-    toast.success('이메일 설정이 저장되었습니다.')
+  }
+
+  const handleSaveEmailSettings = async () => {
+    if (!user) return
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session?.access_token) {
+        toast.error('로그인이 필요합니다.')
+        return
+      }
+
+      const { error } = await supabase
+        .from('user_profiles')
+        .upsert({
+          id: user.id,
+          email: user.email,
+          name: user.user_metadata?.name || user.user_metadata?.full_name || user.email?.split('@')[0],
+          avatar_url: user.user_metadata?.avatar_url,
+          sender_name: emailSettings.fromName || '한시에',
+          sender_email_prefix: emailSettings.fromEmail || 'noreply'
+        })
+
+      if (error) throw error
+
+      toast.success('이메일 설정이 저장되었습니다.')
+    } catch (error) {
+      console.error('Error saving email settings:', error)
+      toast.error('설정 저장 중 오류가 발생했습니다.')
+    }
   }
 
   const renderFeatureValue = (value: boolean | string) => {
@@ -229,91 +270,72 @@ export default function AccountPage() {
             </div>
           </div>
 
-          {/* 이메일 설정 카드 - FREE 사용자도 접근 가능 */}
+          {/* 이메일 발송 설정 카드 */}
           <div className="bg-white rounded-lg border border-gray-200 p-6 mb-8">
-              <h2 className="text-lg font-semibold text-gray-900 mb-4">이메일 발송 설정</h2>
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    발신자 이름
-                  </label>
-                  <input
-                    type="text"
-                    value={emailSettings.fromName}
-                    onChange={(e) => handleEmailSettingsChange('fromName', e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    placeholder="예: 홍길동, ABC회사 인사팀"
-                  />
-                  <p className="text-xs text-gray-500 mt-1">
-                    지원자에게 보여질 발신자 이름입니다.
-                  </p>
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
+                  <Mail className="w-5 h-5 text-blue-600" />
                 </div>
-
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    발신 이메일 주소
-                  </label>
-                  {currentPlan === 'Enterprise' ? (
-                    <div className="space-y-2">
-                      <select
-                        value={emailSettings.fromEmail.includes('@') ? 'custom' : emailSettings.fromEmail}
-                        onChange={(e) => {
-                          if (e.target.value === 'custom') {
-                            handleEmailSettingsChange('fromEmail', 'your-email@yourdomain.com')
-                          } else {
-                            handleEmailSettingsChange('fromEmail', e.target.value)
-                          }
-                        }}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                      >
-                        <option value="noreply@resend.dev">noreply@resend.dev (기본)</option>
-                        <option value="onboarding@resend.dev">onboarding@resend.dev (전문적)</option>
-                        <option value="custom">커스텀 도메인 사용</option>
-                      </select>
-                      {emailSettings.fromEmail.includes('@') && emailSettings.fromEmail !== 'noreply@resend.dev' && emailSettings.fromEmail !== 'onboarding@resend.dev' && (
-                        <div>
-                          <input
-                            type="email"
-                            value={emailSettings.fromEmail}
-                            onChange={(e) => handleEmailSettingsChange('fromEmail', e.target.value)}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                            placeholder="your-email@yourdomain.com"
-                          />
-                          <p className="text-xs text-orange-600 mt-1">
-                            ⚠️ 커스텀 도메인은 Resend에서 별도 인증이 필요합니다.
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <select
-                      value={emailSettings.fromEmail}
-                      onChange={(e) => handleEmailSettingsChange('fromEmail', e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                    >
-                      <option value="noreply@resend.dev">noreply@resend.dev (기본)</option>
-                      <option value="onboarding@resend.dev">onboarding@resend.dev (전문적)</option>
-                    </select>
-                  )}
-                  <p className="text-xs text-gray-500 mt-1">
-                    {currentPlan === 'Enterprise' 
-                      ? '커스텀 도메인을 사용하려면 Resend에서 도메인 인증이 필요합니다.'
-                      : 'Enterprise 플랜에서는 커스텀 도메인을 사용할 수 있습니다.'
-                    }
-                  </p>
-                </div>
-
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                  <h4 className="text-sm font-medium text-blue-900 mb-2">미리보기</h4>
-                  <div className="text-sm text-blue-800">
-                    <strong>발신자:</strong> {emailSettings.fromName} &lt;{emailSettings.fromEmail}&gt;
-                  </div>
-                  <div className="text-sm text-blue-800">
-                    <strong>제목:</strong> [면접제목] - 면접 일정 선택 요청
-                  </div>
+                  <h2 className="text-lg font-semibold text-gray-900">이메일 발송 설정</h2>
+                  <p className="text-sm text-gray-500">지원자에게 전송되는 이메일의 발신자 정보를 설정하세요</p>
                 </div>
               </div>
             </div>
+            
+            <div className="space-y-6">
+              {/* 발신자 이름 */}
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-gray-900">
+                  발신자 이름
+                </label>
+                <input
+                  type="text"
+                  value={emailSettings.fromName}
+                  onChange={(e) => handleEmailSettingsChange('fromName', e.target.value)}
+                  className="w-80 px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                  placeholder="예: 홍길동, ABC회사 인사팀"
+                />
+                <p className="text-xs text-gray-500">
+                  지원자에게 표시될 발신자 이름입니다
+                </p>
+              </div>
+
+              {/* 이메일 주소 */}
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-gray-900">
+                  이메일 주소
+                </label>
+                <div className="flex items-center gap-1 w-fit">
+                  <input
+                    type="text"
+                    value={emailSettings.fromEmail}
+                    onChange={(e) => handleEmailSettingsChange('fromEmail', e.target.value)}
+                    className="w-48 px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+                    placeholder="noreply"
+                  />
+                  <span className="text-sm text-gray-700 font-medium">
+                    @hansee.app
+                  </span>
+                </div>
+                <p className="text-xs text-gray-500">
+                  이메일 주소의 앞부분을 입력하세요
+                </p>
+              </div>
+            </div>
+
+
+            {/* 저장 버튼 */}
+            <div className="mt-6 flex justify-end">
+              <button
+                onClick={handleSaveEmailSettings}
+                className="px-6 py-3 border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                설정 저장
+              </button>
+            </div>
+          </div>
 
           {/* 플랜 업그레이드 섹션 - 주석처리 */}
           {/*showUpgrade && (
@@ -410,5 +432,15 @@ export default function AccountPage() {
         {/*/>*/}
       </div>
     </ProtectedRoute>
+  )
+}
+
+export default function AccountPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-blue-600"></div>
+    </div>}>
+      <AccountPageContent />
+    </Suspense>
   )
 }

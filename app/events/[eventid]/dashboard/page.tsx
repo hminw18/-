@@ -30,6 +30,47 @@ interface Candidate {
   }>
 }
 
+interface ScheduledInterview {
+  id: string
+  candidate_id: string
+  session_id: string
+  scheduled_date: string
+  scheduled_start_time: string
+  scheduled_end_time: string
+  meeting_link?: string
+  meeting_room?: string
+  candidates?: {
+    id: string
+    name: string
+    email: string
+    phone: string
+  } | null
+}
+
+interface ConfirmationData {
+  title: string
+  organizerName: string
+  organizerEmail: string
+  scheduledDate: string
+  scheduledTime: string
+  meetingLocation?: string
+  meetingLink?: string
+  isBulkSend?: boolean
+}
+
+interface SessionGroup {
+  session_id: string
+  scheduled_date: string
+  scheduled_start_time: string
+  scheduled_end_time: string
+  candidates: {
+    candidate_id: string
+    name?: string
+    email?: string
+    phone?: string
+  }[]
+}
+
 interface InterviewEvent {
   id: string
   eventName: string
@@ -127,7 +168,7 @@ async function fetchEventDetails(eventId: string): Promise<InterviewEvent | null
 }
 
 
-const getStatusColor = (status: InterviewEvent["status"]) => {
+const getStatusColor = (status: InterviewEvent["status"]): string => {
   switch (status) {
     case "collecting":
       return "bg-blue-100 text-blue-800"
@@ -144,7 +185,7 @@ const getStatusColor = (status: InterviewEvent["status"]) => {
   }
 }
 
-const getStatusText = (status: InterviewEvent["status"]) => {
+const getStatusText = (status: InterviewEvent["status"]): string => {
   switch (status) {
     case "collecting":
       return "응답 수집 중"
@@ -170,7 +211,7 @@ export default function EventDashboardPage() {
   const [showEditModal, setShowEditModal] = useState(false)
   const [showCloseDialog, setShowCloseDialog] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
-  const [scheduledInterviews, setScheduledInterviews] = useState<any[]>([])
+  const [scheduledInterviews, setScheduledInterviews] = useState<ScheduledInterview[]>([])
   const [isGeneratingSchedule, setIsGeneratingSchedule] = useState(false)
   const [selectedInterviews, setSelectedInterviews] = useState<Set<string>>(new Set())
   const [selectAll, setSelectAll] = useState(false)
@@ -182,15 +223,16 @@ export default function EventDashboardPage() {
   const [reminderType, setReminderType] = useState<"all" | "unresponded" | string>("unresponded")
   const [reminderRecipients, setReminderRecipients] = useState<Array<{name: string, email: string}>>([])
   const [isSendingReminder, setIsSendingReminder] = useState(false)
+  const [currentReminderRecipients, setCurrentReminderRecipients] = useState<Array<{name: string, email: string}>>([])  // 실제 모달 전달용
 
   // 확정 메일 관련 상태
   const [showConfirmationPreview, setShowConfirmationPreview] = useState(false)
-  const [confirmationData, setConfirmationData] = useState<any>(null)
+  const [confirmationData, setConfirmationData] = useState<ConfirmationData | null>(null)
   const [confirmationRecipients, setConfirmationRecipients] = useState<Array<{name: string, email: string}>>([])
   const [isSendingConfirmation, setIsSendingConfirmation] = useState(false)
 
   // Format time ranges by merging consecutive slots
-  const formatTimeRanges = (slots: Array<{ startTime: string; endTime: string; date: string }>) => {
+  const formatTimeRanges = (slots: Array<{ startTime: string; endTime: string; date: string }>): string => {
     if (slots.length === 0) return ""
 
     // Group by date first
@@ -236,7 +278,7 @@ export default function EventDashboardPage() {
   }
 
 
-  const loadEventData = async () => {
+  const loadEventData = async (): Promise<void> => {
     setLoading(true)
     setError(null)
     try {
@@ -252,7 +294,7 @@ export default function EventDashboardPage() {
             
             // 장소 정보 로드
             const locationMap: {[sessionId: string]: string} = {}
-            scheduleResult.data.forEach((interview: any) => {
+            scheduleResult.data.forEach((interview: ScheduledInterview) => {
               if (interview.session_id) {
                 if (interview.meeting_room) {
                   locationMap[interview.session_id] = interview.meeting_room
@@ -313,7 +355,7 @@ export default function EventDashboardPage() {
   const respondedCandidates = event.candidates.filter((c) => c.hasResponded)
   const unrespondedCandidates = event.candidates.filter((c) => !c.hasResponded)
 
-  const handleAutoSchedule = async () => {
+  const handleAutoSchedule = async (): Promise<void> => {
     if (event.status !== "closed") {
       toast.error("마감된 이벤트만 일정 배정이 가능합니다.")
       return
@@ -351,7 +393,7 @@ export default function EventDashboardPage() {
     }
   }
 
-  const handleSendReminder = (type: "all" | "unresponded" | string) => {
+  const handleSendReminder = (type: "all" | "unresponded" | string): void => {
     if (!event) return
     
     let recipients: Array<{name: string, email: string}> = []
@@ -372,12 +414,13 @@ export default function EventDashboardPage() {
       return
     }
     
-    setReminderType(type)
+    // 확정 메일 방식과 동일하게 직접 설정
     setReminderRecipients(recipients)
+    setCurrentReminderRecipients(recipients)  // 즉시 사용할 수 있도록 별도 저장
     setShowReminderPreview(true)
   }
 
-  const handleReminderSend = async (customTemplate?: CustomEmailTemplate) => {
+  const handleReminderSend = async (customTemplate?: CustomEmailTemplate): Promise<void> => {
     if (!event || reminderRecipients.length === 0) return
     
     setIsSendingReminder(true)
@@ -396,6 +439,7 @@ export default function EventDashboardPage() {
         organizerEmail: event.organizerEmail,
         deadlineDate: event.deadline,
         eventId: event.id,
+        shareToken: event.shareToken,
         customTemplate // 반드시 미리보기 템플릿 사용
       }
       
@@ -416,12 +460,12 @@ export default function EventDashboardPage() {
     }
   }
 
-  const handleBulkEmailPreview = (sessionId: string, candidateIds: string[]) => {
+  const handleBulkEmailPreview = (sessionId: string, candidateIds: string[]): void => {
     if (!event) return
 
     // 세션 정보 찾기
     const sessionInterviews = scheduledInterviews.filter(
-      (interview: any) => interview.session_id === sessionId
+      (interview: ScheduledInterview) => interview.session_id === sessionId
     )
 
     if (sessionInterviews.length === 0) {
@@ -443,10 +487,24 @@ export default function EventDashboardPage() {
     const scheduledTime = `${sampleInterview.scheduled_start_time.substring(0, 5)} - ${sampleInterview.scheduled_end_time.substring(0, 5)}`
 
     // 수신자 정보 준비
-    const recipients = sessionInterviews.map((interview: any) => ({
-      name: interview.candidates?.name || '지원자',
-      email: interview.candidates?.email || ''
-    })).filter(r => r.email)
+    const recipients = sessionInterviews.map((interview: ScheduledInterview) => {
+      const email = interview.candidates?.email || ''
+      // 원본 candidates에서 이메일로 매칭해서 실제 이름 찾기
+      const originalCandidate = event.candidates.find(c => c.email === email)
+      
+      console.log('🔍 확정메일 디버깅:', {
+        email,
+        originalCandidateName: originalCandidate?.name,
+        dbCandidateName: interview.candidates?.name,
+        eventCandidatesCount: event.candidates.length,
+        firstEventCandidate: event.candidates[0]
+      })
+      
+      return {
+        name: originalCandidate?.name || interview.candidates?.name || '지원자',
+        email: email
+      }
+    }).filter(r => r.email)
 
     if (recipients.length === 0) {
       toast.error('이메일을 보낼 수 있는 지원자가 없습니다.')
@@ -467,8 +525,17 @@ export default function EventDashboardPage() {
     setShowConfirmationPreview(true)
   }
 
-  const handleConfirmationSend = async (customTemplate?: CustomEmailTemplate) => {
-    if (!confirmationData || confirmationRecipients.length === 0) return
+  const handleConfirmationSend = async (customTemplate?: CustomEmailTemplate): Promise<void> => {
+    console.log('🚀 확정메일 발송 시작:', {
+      confirmationData,
+      recipientsCount: confirmationRecipients.length,
+      recipients: confirmationRecipients
+    })
+    
+    if (!confirmationData || confirmationRecipients.length === 0) {
+      console.error('❌ 확정메일 발송 실패 - 데이터 없음:', { confirmationData, recipientsCount: confirmationRecipients.length })
+      return
+    }
     
     setIsSendingConfirmation(true)
     try {
@@ -490,9 +557,20 @@ export default function EventDashboardPage() {
           
           const scheduledTime = `${interview.scheduled_start_time.substring(0, 5)} - ${interview.scheduled_end_time.substring(0, 5)}`
 
+          // 원본 candidates에서 실제 이름 찾기
+          const originalCandidate = event.candidates.find(c => c.email === interview.candidates.email)
+          const candidateName = originalCandidate?.name || interview.candidates.name || '지원자'
+
           try {
+            console.log('📧 확정메일 개별 발송:', {
+              candidateName,
+              email: interview.candidates.email,
+              scheduledDate,
+              scheduledTime
+            })
+            
             const result = await sendConfirmationEmails(
-              [{ name: interview.candidates.name, email: interview.candidates.email }], 
+              [{ name: candidateName, email: interview.candidates.email }], 
               {
                 title: confirmationData.title,
                 organizerName: confirmationData.organizerName,
@@ -504,9 +582,13 @@ export default function EventDashboardPage() {
                 customTemplate
               }
             )
+            
+            console.log('📧 확정메일 개별 결과:', result)
+            
             if (result.success) successCount++
             else failCount++
           } catch (error) {
+            console.error('❌ 확정메일 개별 발송 에러:', error)
             failCount++
           }
         }
@@ -532,14 +614,14 @@ export default function EventDashboardPage() {
         }
       }
     } catch (error) {
-      console.error('Error sending confirmation emails:', error)
+      console.error('❌ 확정메일 발송 에러:', error)
       toast.error('확정 메일 발송 중 오류가 발생했습니다.')
     } finally {
       setIsSendingConfirmation(false)
     }
   }
 
-  const handleLocationUpdate = async (sessionId: string, location: string) => {
+  const handleLocationUpdate = async (sessionId: string, location: string): Promise<void> => {
     try {
       const result = await updateSessionLocation(sessionId, location)
       
@@ -555,15 +637,15 @@ export default function EventDashboardPage() {
   }
 
   // 세션별 데이터 준비
-  const getSessionGroups = () => {
+  const getSessionGroups = (): SessionGroup[] => {
     if (!scheduledInterviews || scheduledInterviews.length === 0) {
       return []
     }
 
     // 세션별로 그룹핑
-    const sessionMap = new Map()
+    const sessionMap = new Map<string, SessionGroup>()
     
-    scheduledInterviews.forEach(interview => {
+    scheduledInterviews.forEach((interview: ScheduledInterview) => {
       const sessionId = interview.session_id
       
       if (!sessionMap.has(sessionId)) {
@@ -595,7 +677,7 @@ export default function EventDashboardPage() {
   }
 
 
-  const handleCopyShareLink = async () => {
+  const handleCopyShareLink = async (): Promise<void> => {
     if (!event?.shareToken) {
       toast.error("공유 링크가 없습니다. 이벤트 설정을 확인해주세요.")
       return
@@ -625,7 +707,7 @@ export default function EventDashboardPage() {
     }
   }
 
-  const handleGenerateSchedule = async () => {
+  const handleGenerateSchedule = async (): Promise<void> => {
     if (!event) return
 
     const respondedCount = event.candidates.filter(c => c.hasResponded).length
@@ -661,7 +743,7 @@ export default function EventDashboardPage() {
     }
   }
 
-  const handleCloseEvent = async () => {
+  const handleCloseEvent = async (): Promise<void> => {
     const result = await closeInterviewEvent(eventId)
     if (result.success) {
       toast.success("이벤트가 마감되었습니다!")
@@ -672,7 +754,7 @@ export default function EventDashboardPage() {
     setShowCloseDialog(false)
   }
 
-  const handleDeleteEvent = async () => {
+  const handleDeleteEvent = async (): Promise<void> => {
     const result = await deleteInterviewEvent(eventId)
     if (result.success) {
       toast.success("이벤트가 삭제되었습니다!")
@@ -684,7 +766,7 @@ export default function EventDashboardPage() {
   }
 
   // 체크박스 관리 함수들
-  const handleSelectAll = (checked: boolean) => {
+  const handleSelectAll = (checked: boolean): void => {
     setSelectAll(checked)
     if (checked) {
       const allIds = new Set(scheduledInterviews.map(interview => interview.candidate_id))
@@ -694,7 +776,7 @@ export default function EventDashboardPage() {
     }
   }
 
-  const handleSelectInterview = (candidateId: string, checked: boolean) => {
+  const handleSelectInterview = (candidateId: string, checked: boolean): void => {
     const newSelected = new Set(selectedInterviews)
     if (checked) {
       newSelected.add(candidateId)
@@ -930,7 +1012,7 @@ export default function EventDashboardPage() {
                 <tbody className="bg-white divide-y divide-gray-200">
                   {(() => {
                     // 세션별로 그룹화
-                    const sessionGroups = scheduledInterviews.reduce((groups: any, interview: any) => {
+                    const sessionGroups = scheduledInterviews.reduce((groups: {[sessionId: string]: SessionGroup}, interview: ScheduledInterview) => {
                       const sessionId = interview.session_id
                       if (!groups[sessionId]) {
                         groups[sessionId] = {
@@ -950,15 +1032,15 @@ export default function EventDashboardPage() {
                       return groups
                     }, {})
 
-                    return Object.values(sessionGroups).map((session: any, index: number) => (
+                    return Object.values(sessionGroups).map((session: SessionGroup, index: number) => (
                       <tr key={`session-${session.session_id}-${index}`} className="hover:bg-gray-50">
                         <td className="px-6 py-4 whitespace-nowrap">
                           <input 
                             type="checkbox" 
                             className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                            checked={session.candidates.every((candidate: any) => selectedInterviews.has(candidate.candidate_id))}
+                            checked={session.candidates.every((candidate) => selectedInterviews.has(candidate.candidate_id))}
                             onChange={(e) => {
-                              session.candidates.forEach((candidate: any) => {
+                              session.candidates.forEach((candidate) => {
                                 handleSelectInterview(candidate.candidate_id, e.target.checked)
                               })
                             }}
@@ -984,7 +1066,7 @@ export default function EventDashboardPage() {
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
                           <div className="space-y-1">
-                            {session.candidates.map((candidate: any, idx: number) => (
+                            {session.candidates.map((candidate, idx: number) => (
                               <div key={`${session.session_id}-${candidate.candidate_id}-${idx}`} className="font-medium text-gray-900 text-sm">
                                 {candidate.name}
                               </div>
@@ -993,7 +1075,7 @@ export default function EventDashboardPage() {
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
                           <div className="space-y-1">
-                            {session.candidates.map((candidate: any, idx: number) => (
+                            {session.candidates.map((candidate, idx: number) => (
                               <div key={`${session.session_id}-${candidate.candidate_id}-${idx}`} className="text-sm text-gray-600">
                                 {candidate.email}
                               </div>
@@ -1002,7 +1084,7 @@ export default function EventDashboardPage() {
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
                           <div className="space-y-1">
-                            {session.candidates.map((candidate: any, idx: number) => (
+                            {session.candidates.map((candidate, idx: number) => (
                               <div key={`${session.session_id}-${candidate.candidate_id}-${idx}`} className="text-sm text-gray-600">
                                 {candidate.phone}
                               </div>
@@ -1048,7 +1130,7 @@ export default function EventDashboardPage() {
                         <td className="px-6 py-4 whitespace-nowrap">
                           <div className="flex items-center gap-2">
                             <button
-                              onClick={() => handleBulkEmailPreview(session.session_id, session.candidates.map((c: any) => c.candidate_id))}
+                              onClick={() => handleBulkEmailPreview(session.session_id, session.candidates.map((c) => c.candidate_id))}
                               className="text-blue-600 hover:text-blue-900 text-sm font-medium"
                             >
                               세션 메일 발송
@@ -1066,7 +1148,7 @@ export default function EventDashboardPage() {
             <div className="px-6 py-4 bg-gray-50 border-t border-gray-200">
               <div className="flex items-center justify-between">
                 <div className="text-sm text-gray-600">
-                  총 {scheduledInterviews.length}명의 지원자, {Object.keys(scheduledInterviews.reduce((groups: any, interview: any) => {
+                  총 {scheduledInterviews.length}명의 지원자, {Object.keys(scheduledInterviews.reduce((groups: {[key: string]: boolean}, interview: ScheduledInterview) => {
                     groups[interview.session_id] = true
                     return groups
                   }, {})).length}개 세션
@@ -1077,7 +1159,7 @@ export default function EventDashboardPage() {
                       if (!event) return
 
                       // 모든 세션의 수신자 정보 준비
-                      const allRecipients = scheduledInterviews.map((interview: any) => ({
+                      const allRecipients = scheduledInterviews.map((interview: ScheduledInterview) => ({
                         name: interview.candidates?.name || '지원자',
                         email: interview.candidates?.email || ''
                       })).filter(r => r.email)
@@ -1243,13 +1325,14 @@ export default function EventDashboardPage() {
               organizerName: event.organizerName,
               organizerEmail: event.organizerEmail,
               deadlineDate: event.deadline,
-              eventId: event.id
+              eventId: event.id,
+              shareToken: event.shareToken
             }}
-            candidateName={reminderRecipients[0]?.name || "지원자"}
+            candidateName={currentReminderRecipients[0]?.name || "지원자"}
             fromName={event.organizerName}
             fromEmail={event.organizerEmail}
             isReminder={true}
-            recipients={reminderRecipients}
+            recipients={currentReminderRecipients}
           />
         )}
 

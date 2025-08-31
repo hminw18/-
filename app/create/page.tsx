@@ -386,6 +386,7 @@ export default function CreateInterviewPage() {
                 organizerEmail: basicInfo.organizerEmail,
                 deadlineDate: reviewSettings.deadline,
                 eventId: result.event.id,
+                shareToken: result.event.shareToken,
                 fromName: userEmailSettings.fromName,
                 fromEmail: userEmailSettings.fromEmail,
                 customTemplate: customEmailTemplate || undefined,

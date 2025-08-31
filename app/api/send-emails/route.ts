@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { Resend } from 'resend'
 import { getInterviewInviteEmailTemplate, getReminderEmailTemplate, getConfirmationEmailTemplate } from '../../../lib/email-templates'
+import { supabase } from '../../../lib/supabase'
 
 const resend = new Resend(process.env.RESEND_API_KEY)
 
@@ -29,15 +30,39 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    const authToken = request.headers.get('Authorization')?.split('Bearer ')[1]
+    if (!authToken) {
+      return NextResponse.json({ error: '인증 토큰이 없습니다.' }, { status: 401 })
+    }
+
+    const { data: { user }, error: userError } = await supabase.auth.getUser(authToken)
+
+    if (userError || !user) {
+      return NextResponse.json({ error: '인증에 실패했습니다.' }, { status: 401 })
+    }
+
+    const { data: userProfile, error: profileError } = await supabase
+      .from('user_profiles')
+      .select('sender_name, sender_email_prefix')
+      .eq('id', user.id)
+      .single()
+
+    if (profileError) {
+      console.error('Error fetching user profile:', profileError)
+      // 프로필이 없어도 기본값으로 계속 진행
+    }
+
+    const fromName = userProfile?.sender_name || '한시에'
+    const fromAddress = `${userProfile?.sender_email_prefix || 'noreply'}@hansee.app`
+
     const results = []
     const errors = []
 
     // 각 수신자에게 개별 메일 발송
+    console.log('📧 API 받은 recipients:', recipients)
     for (const recipient of recipients) {
+      console.log('📧 현재 수신자:', recipient)
       try {
-        // 응답 URL 생성
-        const responseUrl = `${process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000'}/respond/${interviewData.eventId}?email=${encodeURIComponent(recipient.email)}`
-
         let html: string, text: string, subject: string
 
         if (type === 'confirmation') {
@@ -57,6 +82,9 @@ export async function POST(request: NextRequest) {
           text = templateResult.text
           subject = `면접 일정 확정 안내 - ${confirmationData.title}`
         } else {
+          // 응답 URL 생성 (초대/리마인더 메일용)
+          const responseUrl = `${process.env.NEXT_PUBLIC_SITE_URL || 'https://hansee.app'}/respond/${interviewData.shareToken || interviewData.eventId}`
+          
           // 기존 초대/리마인더 메일 처리
           // 커스텀 템플릿이 있으면 사용, 없으면 기본 템플릿 사용
           if (interviewData.customTemplate && (type === 'invite' || type === 'reminder')) {
@@ -99,9 +127,7 @@ export async function POST(request: NextRequest) {
 
         // 메일 발송
         const data = type === 'confirmation' ? confirmationData : interviewData
-        const fromName = data.fromName || process.env.EMAIL_FROM_NAME || '한시에'
-        const fromAddress = data.fromEmail || process.env.EMAIL_FROM_ADDRESS || 'onboarding@resend.dev'
-        
+
         console.log(`Sending email to ${recipient.email}:`, {
           from: `${fromName} <${fromAddress}>`,
           to: recipient.email,

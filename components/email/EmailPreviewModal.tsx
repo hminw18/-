@@ -77,7 +77,7 @@ export default function EmailPreviewModal({
         organizerName: interviewData.organizerName,
         organizerEmail: interviewData.organizerEmail,
         deadlineDate: interviewData.deadlineDate,
-        responseUrl: `${window.location.origin}/respond/${interviewData.eventId}?email=${recipients.length > 0 ? recipients[0].email : 'example@email.com'}`
+        responseUrl: `${window.location.origin}/respond/${interviewData.shareToken || interviewData.eventId}`
       })
     : interviewData
     ? getInterviewInviteEmailTemplate({
@@ -86,7 +86,7 @@ export default function EmailPreviewModal({
         organizerName: interviewData.organizerName,
         organizerEmail: interviewData.organizerEmail,
         deadlineDate: interviewData.deadlineDate,
-        responseUrl: `${window.location.origin}/respond/${interviewData.eventId}?email=${recipients.length > 0 ? recipients[0].email : 'example@email.com'}`
+        responseUrl: `${window.location.origin}/respond/${interviewData.shareToken || interviewData.eventId}`
       })
     : { html: '', text: '' }
 
@@ -110,7 +110,7 @@ export default function EmailPreviewModal({
           organizerName: interviewData.organizerName,
           organizerEmail: interviewData.organizerEmail,
           deadlineDate: interviewData.deadlineDate,
-          responseUrl: `${window.location.origin}/respond/${interviewData.eventId}?email=${recipients.length > 0 ? recipients[0].email : 'example@email.com'}`
+          responseUrl: `${window.location.origin}/respond/${interviewData.shareToken || interviewData.eventId}`
         })
       : interviewData
       ? getInterviewInviteEmailTemplate({
@@ -119,7 +119,7 @@ export default function EmailPreviewModal({
           organizerName: interviewData.organizerName,
           organizerEmail: interviewData.organizerEmail,
           deadlineDate: interviewData.deadlineDate,
-          responseUrl: `${window.location.origin}/respond/${interviewData.eventId}?email=${recipients.length > 0 ? recipients[0].email : 'example@email.com'}`
+          responseUrl: `${window.location.origin}/respond/${interviewData.shareToken || interviewData.eventId}`
         })
       : { html: '', text: '' }
 
@@ -134,6 +134,17 @@ export default function EmailPreviewModal({
       htmlContent: template.html,
       textContent: template.text
     }
+  })
+
+  console.log('🎭 EmailPreviewModal 디버깅:', {
+    isReminder,
+    isConfirmation,
+    candidateName,
+    recipientsCount: recipients.length,
+    firstRecipient: recipients[0],
+    actualCandidateName,
+    templateHtmlPreview: emailTemplate?.htmlContent?.substring(0, 500) + '...',
+    templateSubject: emailTemplate?.subject
   })
 
   const handleSave = () => {

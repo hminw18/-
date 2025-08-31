@@ -1,3 +1,5 @@
+import { supabase } from '../lib/supabase'
+
 interface EmailRecipient {
   name: string
   email: string
@@ -33,16 +35,26 @@ interface EmailResponse {
   }>
 }
 
+async function getAuthHeaders() {
+  const { data: { session } } = await supabase.auth.getSession()
+  if (!session) {
+    throw new Error('User not authenticated')
+  }
+  return {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${session.access_token}`,
+  }
+}
+
 export async function sendInterviewInviteEmails(
   recipients: EmailRecipient[],
   interviewData: InterviewEmailData
 ): Promise<EmailResponse> {
   try {
+    const headers = await getAuthHeaders()
     const response = await fetch('/api/send-emails', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify({
         type: 'invite',
         recipients,
@@ -66,11 +78,10 @@ export async function sendReminderEmails(
   interviewData: InterviewEmailData
 ): Promise<EmailResponse> {
   try {
+    const headers = await getAuthHeaders()
     const response = await fetch('/api/send-emails', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify({
         type: 'reminder',
         recipients,
@@ -104,11 +115,10 @@ export async function sendConfirmationEmails(
   confirmationData: ConfirmationEmailData
 ): Promise<EmailResponse> {
   try {
+    const headers = await getAuthHeaders()
     const response = await fetch('/api/send-emails', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers,
       body: JSON.stringify({
         type: 'confirmation',
         recipients,

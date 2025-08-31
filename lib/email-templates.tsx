@@ -15,7 +15,7 @@ export function getInterviewInviteEmailTemplate({
   deadlineDate,
   responseUrl
 }: InterviewInviteEmailProps) {
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || (typeof window !== 'undefined' ? window.location.origin : 'https://your-domain.com')
+  const baseUrl = 'https://hansee.app'
   
   const html = `
 <!DOCTYPE html>
@@ -147,8 +147,8 @@ export function getInterviewInviteEmailTemplate({
   <div class="container">
     <div class="header">
       <div class="logo-container">
-        <img src="${baseUrl}/hanseeicon.png" alt="한시에" class="logo-icon" />
-        <img src="${baseUrl}/hanseetextlogo.svg" alt="한시에" class="logo-text" />
+        <img src="${baseUrl}/hanseeicon.png" alt="한시에" class="logo-icon" style="width: 32px; height: 32px; display: block;" />
+        <img src="${baseUrl}/hanseetextlogo.png" alt="한시에" class="logo-text" style="height: 24px; display: block;" />
       </div>
       <h1 class="title">면접 일정 선택 요청</h1>
       <p class="subtitle">한시에에서 발송된 메일입니다</p>
@@ -247,7 +247,7 @@ export function getReminderEmailTemplate({
   deadlineDate,
   responseUrl
 }: ReminderEmailProps) {
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || (typeof window !== 'undefined' ? window.location.origin : 'https://your-domain.com')
+  const baseUrl = 'https://hansee.app'
   
   // 원본 날짜를 한국 시간으로 포맷팅 (서버에서도 안전하게)
   let formattedDeadlineDate = deadlineDate
@@ -382,8 +382,8 @@ export function getReminderEmailTemplate({
   <div class="container">
     <div class="header">
       <div class="logo-container">
-        <img src="${baseUrl}/hanseeicon.png" alt="한시에" class="logo-icon" />
-        <img src="${baseUrl}/hanseetextlogo.svg" alt="한시에" class="logo-text" />
+        <img src="${baseUrl}/hanseeicon.png" alt="한시에" class="logo-icon" style="width: 32px; height: 32px; display: block;" />
+        <img src="${baseUrl}/hanseetextlogo.png" alt="한시에" class="logo-text" style="height: 24px; display: block;" />
       </div>
       <h1 class="title">면접 일정 선택 리마인더</h1>
     </div>
@@ -458,7 +458,7 @@ export function getConfirmationEmailTemplate({
   meetingLocation,
   meetingLink
 }: ConfirmationEmailProps) {
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || (typeof window !== 'undefined' ? window.location.origin : 'https://your-domain.com')
+  const baseUrl = 'https://hansee.app'
   const html = `
 <!DOCTYPE html>
 <html lang="ko">
@@ -572,8 +572,8 @@ export function getConfirmationEmailTemplate({
   <div class="container">
     <div class="header">
       <div class="logo-container">
-        <img src="${baseUrl}/hanseeicon.png" alt="한시에" class="logo-icon" />
-        <img src="${baseUrl}/hanseetextlogo.svg" alt="한시에" class="logo-text" />
+        <img src="${baseUrl}/hanseeicon.png" alt="한시에" class="logo-icon" style="width: 32px; height: 32px; display: block;" />
+        <img src="${baseUrl}/hanseetextlogo.png" alt="한시에" class="logo-text" style="height: 24px; display: block;" />
       </div>
       <h1 class="title">면접 일정 확정 안내</h1>
       <p class="subtitle">한시에에서 발송된 메일입니다</p>

@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { Mail, Send } from 'lucide-react'
 import toast from 'react-hot-toast'
+import { supabase } from '../../lib/supabase'
 
 export default function TestEmailPage() {
   const [email, setEmail] = useState('')
@@ -15,12 +16,20 @@ export default function TestEmailPage() {
     }
 
     setIsLoading(true)
-    
+
     try {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) {
+        toast.error('로그인이 필요합니다.')
+        setIsLoading(false)
+        return
+      }
+
       const response = await fetch('/api/send-emails', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`,
         },
         body: JSON.stringify({
           type: 'invite',
@@ -34,8 +43,6 @@ export default function TestEmailPage() {
             organizerEmail: 'test@example.com',
             deadlineDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
             eventId: 'test-event-id',
-            fromName: '면접시간',
-            fromEmail: 'onboarding@resend.dev'
           }
         }),
       })
