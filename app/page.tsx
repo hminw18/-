@@ -506,11 +506,20 @@ export default function LandingPage() {
       </section>
 
       {/* Footer */}
-      <footer className="bg-gray-900 text-white py-3">
+      <footer className="bg-gray-900 text-white py-4">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-
-          <div className="text-center text-gray-400">
-            <p>&copy; 2025 한시에. All rights reserved.</p>
+          <div className="flex items-center justify-between text-sm">
+            <div className="text-gray-500">
+              <p>&copy; 2025 한시에. All rights reserved.</p>
+            </div>
+            <div className="flex items-center space-x-4 text-gray-400">
+              <Link href="/terms" className="hover:text-white">
+                이용약관
+              </Link>
+              <Link href="/privacy" className="hover:text-white">
+                개인정보처리방침
+              </Link>
+            </div>
           </div>
         </div>
       </footer>
