@@ -14,8 +14,8 @@ import toast from 'react-hot-toast'
 
 export default function AccountPage() {
   const { user } = useAuth()
-  const router = useRouter()
-  const searchParams = useSearchParams()
+  // const router = useRouter()
+  // const searchParams = useSearchParams()
   const [userPlan, setUserPlan] = useState(() => getUserPlan())
   const [showUpgrade, setShowUpgrade] = useState(false)
   const [showPaymentModal, setShowPaymentModal] = useState(false)
@@ -71,56 +71,56 @@ export default function AccountPage() {
   }, [user])
 
   // URL 파라미터에서 결제 결과 확인
-  useEffect(() => {
-    const paymentStatus = searchParams.get('payment')
-    const error = searchParams.get('error')
-
-    if (paymentStatus === 'success') {
-      toast.success('Pro 플랜 결제가 완료되었습니다! 잠시 후 플랜이 업데이트됩니다.')
-      // 3초 후 결제 상태 다시 확인
-      setTimeout(() => {
-        window.location.reload()
-      }, 3000)
-    } else if (paymentStatus === 'failed') {
-      const errorMsg = error ? decodeURIComponent(error) : '알 수 없는 오류가 발생했습니다.'
-      toast.error(`결제가 실패했습니다: ${errorMsg}`)
-    }
-
-    // URL 파라미터 정리
-    if (paymentStatus) {
-      router.replace('/account', { scroll: false })
-    }
-  }, [searchParams, router])
-
-  const handleUpgrade = (plan: string) => {
-    if (plan === 'Pro') {
-      // Pro 플랜은 실제 결제 모달 열기
-      setShowPaymentModal(true)
-      return
-    }
-
-    try {
-      if (plan === 'Enterprise') {
-        // Enterprise는 상담 시뮬레이션
-        toast.success(`Enterprise 플랜 상담 요청이 접수되었습니다. 곧 연락드리겠습니다.`)
-        upgradePlan('Enterprise')
-      } else {
-        upgradePlan(plan as PlanType)
-        toast.success(`${plan} 플랜으로 업그레이드되었습니다!`)
-      }
-      
-      // 상태 업데이트
-      setUserPlan(getUserPlan())
-      setShowUpgrade(false)
-    } catch (error) {
-      toast.error('업그레이드 중 오류가 발생했습니다.')
-    }
-  }
-
-  const handlePaymentSuccess = () => {
-    setShowPaymentModal(false)
-    toast.success('결제 요청이 전송되었습니다. 결제창에서 진행해주세요.')
-  }
+  // useEffect(() => {
+  //   const paymentStatus = searchParams.get('payment')
+  //   const error = searchParams.get('error')
+  //
+  //   if (paymentStatus === 'success') {
+  //     toast.success('Pro 플랜 결제가 완료되었습니다! 잠시 후 플랜이 업데이트됩니다.')
+  //     // 3초 후 결제 상태 다시 확인
+  //     setTimeout(() => {
+  //       window.location.reload()
+  //     }, 3000)
+  //   } else if (paymentStatus === 'failed') {
+  //     const errorMsg = error ? decodeURIComponent(error) : '알 수 없는 오류가 발생했습니다.'
+  //     toast.error(`결제가 실패했습니다: ${errorMsg}`)
+  //   }
+  //
+  //   // URL 파라미터 정리
+  //   if (paymentStatus) {
+  //     router.replace('/account', { scroll: false })
+  //   }
+  // }, [searchParams, router])
+  //
+  // const handleUpgrade = (plan: string) => {
+  //   if (plan === 'Pro') {
+  //     // Pro 플랜은 실제 결제 모달 열기
+  //     setShowPaymentModal(true)
+  //     return
+  //   }
+  //
+  //   try {
+  //     if (plan === 'Enterprise') {
+  //       // Enterprise는 상담 시뮬레이션
+  //       toast.success(`Enterprise 플랜 상담 요청이 접수되었습니다. 곧 연락드리겠습니다.`)
+  //       upgradePlan('Enterprise')
+  //     } else {
+  //       upgradePlan(plan as PlanType)
+  //       toast.success(`${plan} 플랜으로 업그레이드되었습니다!`)
+  //     }
+  //
+  //     // 상태 업데이트
+  //     setUserPlan(getUserPlan())
+  //     setShowUpgrade(false)
+  //   } catch (error) {
+  //     toast.error('업그레이드 중 오류가 발생했습니다.')
+  //   }
+  // }
+  //
+  // const handlePaymentSuccess = () => {
+  //   setShowPaymentModal(false)
+  //   toast.success('결제 요청이 전송되었습니다. 결제창에서 진행해주세요.')
+  // }
 
   const handleResetPlan = () => {
     resetPlanToFree()
@@ -403,11 +403,11 @@ export default function AccountPage() {
         </div>
 
         {/* 결제 모달 */}
-        <PaymentModal
-          isOpen={showPaymentModal}
-          onClose={() => setShowPaymentModal(false)}
-          onSuccess={handlePaymentSuccess}
-        />
+        {/*<PaymentModal*/}
+        {/*  isOpen={showPaymentModal}*/}
+        {/*  onClose={() => setShowPaymentModal(false)}*/}
+        {/*  onSuccess={handlePaymentSuccess}*/}
+        {/*/>*/}
       </div>
     </ProtectedRoute>
   )
