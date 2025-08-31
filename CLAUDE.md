@@ -16,7 +16,7 @@ This project uses `pnpm` as the package manager instead of npm.
 ## Architecture Overview
 
 ### Application Type
-This is a Next.js 15.2.4 application built with React 19 for interview scheduling. The app is called "InterviewSync" and helps coordinate interview time slots between interviewers and candidates.
+This is a Next.js 15.2.4 application built with React 19 for interview scheduling. The app is called "Hansee" and helps coordinate interview time slots between interviewers and candidates.
 
 ### Tech Stack
 - **Framework**: Next.js 15.2.4 with App Router

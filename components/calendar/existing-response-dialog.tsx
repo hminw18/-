@@ -3,6 +3,7 @@
 import type React from "react"
 import { motion } from "framer-motion"
 import { X, Clock, Calendar } from "lucide-react"
+import { formatDateForDB } from "../../utils/calendar"
 
 interface ExistingResponseDialogProps {
   isOpen: boolean
@@ -26,6 +27,50 @@ export default function ExistingResponseDialog({
 }: ExistingResponseDialogProps) {
   if (!isOpen) return null
 
+  // Format time ranges by merging consecutive slots
+  const formatTimeRanges = (slots: Array<{ startTime: string; endTime: string }>) => {
+    if (slots.length === 0) return ""
+
+    // Extract start times and sort them
+    const startTimes = slots.map(slot => slot.startTime).sort()
+
+    if (startTimes.length === 0) return ""
+
+    const ranges: string[] = []
+    let rangeStart = startTimes[0]
+    let currentEnd = slots.find(s => s.startTime === startTimes[0])?.endTime || startTimes[0]
+
+    // Find the end time for the current range by looking at consecutive slots
+    for (let i = 1; i < startTimes.length; i++) {
+      const currentStart = startTimes[i]
+      const nextEnd = slots.find(s => s.startTime === currentStart)?.endTime || currentStart
+      
+      if (currentEnd === currentStart) {
+        // Consecutive slot - extend current range
+        currentEnd = nextEnd
+      } else {
+        // Non-consecutive slot - save current range and start new one
+        ranges.push(`${rangeStart} - ${currentEnd}`)
+        rangeStart = currentStart
+        currentEnd = nextEnd
+      }
+    }
+    ranges.push(`${rangeStart} - ${currentEnd}`) // Add the last range
+
+    return ranges.join(", ")
+  }
+
+  // Group responses by date
+  const groupedResponses = responses.reduce(
+    (groups, response) => {
+      const dateKey = formatDateForDB(response.date)
+      if (!groups[dateKey]) groups[dateKey] = []
+      groups[dateKey].push(response)
+      return groups
+    },
+    {} as { [key: string]: typeof responses }
+  )
+
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
       <motion.div
@@ -42,35 +87,10 @@ export default function ExistingResponseDialog({
         </div>
 
         <div className="p-6">
-          <div className="mb-4">
-            <p className="text-sm text-gray-600 mb-4">
-              이미 응답하신 기록이 있습니다. 기존 응답을 유지하거나 수정할 수 있습니다.
+          <div className="mb-6">
+            <p className="text-sm text-gray-600">
+              이미 응답하신 기록이 있습니다. 어떻게 하시겠습니까?
             </p>
-            
-            <div className="bg-blue-50 rounded-lg p-4 mb-6">
-              <div className="flex items-center gap-2 mb-3">
-                <Calendar className="w-4 h-4 text-blue-600" />
-                <span className="text-sm font-medium text-blue-800">기존 선택 시간</span>
-              </div>
-              <div className="space-y-2">
-                {responses.map((response, index) => (
-                  <div key={index} className="flex items-center gap-3 text-sm">
-                    <div className="flex items-center gap-2 text-blue-700">
-                      <Calendar className="w-3 h-3" />
-                      <span>{response.date.toLocaleDateString('ko-KR', { 
-                        year: 'numeric', 
-                        month: 'long', 
-                        day: 'numeric' 
-                      })}</span>
-                    </div>
-                    <div className="flex items-center gap-2 text-blue-700">
-                      <Clock className="w-3 h-3" />
-                      <span>{response.startTime} - {response.endTime}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
           </div>
 
           <div className="flex gap-3">

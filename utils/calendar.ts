@@ -7,6 +7,9 @@ export const getFirstDayOfMonth = (date: Date): number => {
 }
 
 export const isToday = (date: Date): boolean => {
+  // 클라이언트 사이드에서만 실행 (hydration 오류 방지)
+  if (typeof window === 'undefined') return false
+  
   const today = new Date()
   return (
     date.getDate() === today.getDate() &&
@@ -25,13 +28,21 @@ export const isSameDay = (date1: Date, date2: Date | null): boolean => {
 }
 
 export const isPastDate = (date: Date): boolean => {
+  // 클라이언트 사이드에서만 실행 (hydration 오류 방지)
+  if (typeof window === 'undefined') return false
+  
   const today = new Date()
   today.setHours(0, 0, 0, 0)
   return date < today
 }
 
 export const formatDate = (date: Date): string => {
-  return date.toLocaleDateString("en-US", {
+  // 클라이언트 사이드에서만 실행하여 hydration 오류 방지
+  if (typeof window === 'undefined') {
+    return date.toLocaleDateString()
+  }
+  
+  return date.toLocaleDateString("ko-KR", {
     weekday: "long",
     year: "numeric",
     month: "long",
@@ -40,6 +51,11 @@ export const formatDate = (date: Date): string => {
 }
 
 export const formatShortDate = (date: Date): string => {
+  // 클라이언트 사이드에서만 실행하여 hydration 오류 방지
+  if (typeof window === 'undefined') {
+    return date.toLocaleDateString()
+  }
+  
   return date.toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",

@@ -2,7 +2,7 @@
 
 import { motion } from "framer-motion"
 import type { TimeSlot } from "../../types/calendar"
-import { formatDate } from "../../utils/calendar"
+import { formatDate, formatDateForDB } from "../../utils/calendar"
 
 interface SelectedTimeSlot {
   date: Date
@@ -19,6 +19,49 @@ interface SuccessStateProps {
 }
 
 export default function SuccessState({ selectedTimeSlots, onEdit }: SuccessStateProps) {
+  // Format time ranges by merging consecutive slots
+  const formatTimeRanges = (slots: Array<{ startTime: string; endTime: string }>) => {
+    if (slots.length === 0) return ""
+
+    // Extract start times and sort them
+    const startTimes = slots.map(slot => slot.startTime).sort()
+
+    if (startTimes.length === 0) return ""
+
+    const ranges: string[] = []
+    let rangeStart = startTimes[0]
+    let currentEnd = slots.find(s => s.startTime === startTimes[0])?.endTime || startTimes[0]
+
+    // Find the end time for the current range by looking at consecutive slots
+    for (let i = 1; i < startTimes.length; i++) {
+      const currentStart = startTimes[i]
+      const nextEnd = slots.find(s => s.startTime === currentStart)?.endTime || currentStart
+      
+      if (currentEnd === currentStart) {
+        // Consecutive slot - extend current range
+        currentEnd = nextEnd
+      } else {
+        // Non-consecutive slot - save current range and start new one
+        ranges.push(`${rangeStart} - ${currentEnd}`)
+        rangeStart = currentStart
+        currentEnd = nextEnd
+      }
+    }
+    ranges.push(`${rangeStart} - ${currentEnd}`) // Add the last range
+
+    return ranges.join(", ")
+  }
+
+  // Group slots by date
+  const groupedSlots = selectedTimeSlots.reduce(
+    (groups, slot) => {
+      const dateKey = formatDateForDB(slot.date)
+      if (!groups[dateKey]) groups[dateKey] = []
+      groups[dateKey].push(slot)
+      return groups
+    },
+    {} as { [key: string]: SelectedTimeSlot[] }
+  )
   return (
     <div className="text-center px-4">
       <motion.div
@@ -37,15 +80,15 @@ export default function SuccessState({ selectedTimeSlots, onEdit }: SuccessState
       </p>
       <div className="bg-gray-50 rounded-lg p-4 text-left text-sm space-y-3">
         <p className="text-gray-700 font-medium mb-2">선택한 시간:</p>
-        {selectedTimeSlots.map((slot, index) => (
-          <div key={index} className="space-y-1">
+        {Object.entries(groupedSlots).map(([dateKey, slots], index) => (
+          <div key={dateKey} className="space-y-1">
             <p className="text-gray-700">
-              <strong>날짜:</strong> {formatDate(slot.date)}
+              <strong>날짜:</strong> {formatDate(slots[0].date)}
             </p>
             <p className="text-gray-700">
-              <strong>시간:</strong> {slot.startTime} - {slot.endTime}
+              <strong>시간:</strong> {formatTimeRanges(slots)}
             </p>
-            {index < selectedTimeSlots.length - 1 && <hr className="my-2" />}
+            {index < Object.entries(groupedSlots).length - 1 && <hr className="my-2" />}
           </div>
         ))}
       </div>

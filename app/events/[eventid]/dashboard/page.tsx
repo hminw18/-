@@ -2,16 +2,18 @@
 
 import { useState, useEffect } from "react"
 import { useParams } from "next/navigation"
-import { Mail, Edit, Trash2, CheckCircle, XCircle, ArrowLeft, Send, Settings, RefreshCw, Copy, Link as LinkIcon } from "lucide-react"
+import { Mail, Edit, Trash2, CheckCircle, XCircle, ArrowLeft, Send, Settings, RefreshCw, Copy, Link as LinkIcon, Users } from "lucide-react"
 import Link from "next/link"
 import toast from 'react-hot-toast'
-import { getInterviewEvent, closeInterviewEvent, deleteInterviewEvent, generateInterviewSchedule, getScheduledInterviews } from "../../../../lib/database"
+import { getInterviewEvent, closeInterviewEvent, deleteInterviewEvent, generateInterviewSchedule, getScheduledInterviews, updateSessionLocation } from "../../../../lib/database"
+import { sendConfirmationEmails, sendReminderEmails } from "../../../../utils/email"
 import ProtectedRoute from "../../../../components/auth/ProtectedRoute"
 import { useAuth } from "../../../../contexts/AuthContext"
-import { parseDateFromDB } from "../../../../utils/calendar"
+import { parseDateFromDB, formatDateForDB } from "../../../../utils/calendar"
 import EditEventModal from "../../../../components/ui/edit-event-modal"
 import ConfirmationDialog from "../../../../components/ui/confirmation-dialog"
 import AppHeader from "../../../../components/ui/app-header"
+import EmailPreviewModal, { CustomEmailTemplate } from "../../../../components/email/EmailPreviewModal"
 
 interface Candidate {
   id: string
@@ -35,6 +37,7 @@ interface InterviewEvent {
   status: "collecting" | "closed" | "completed" | "scheduled" | "failed"
   interviewLength: number
   simultaneousCount: number
+  organizerName: string
   organizerEmail: string
   deadline: string
   shareToken?: string
@@ -110,6 +113,7 @@ async function fetchEventDetails(eventId: string): Promise<InterviewEvent | null
       status: dbEvent.status as InterviewEvent['status'],
       interviewLength: dbEvent.interview_length,
       simultaneousCount: dbEvent.simultaneous_count,
+      organizerName: dbEvent.organizer_name || undefined,
       organizerEmail: dbEvent.organizer_email,
       deadline: dbEvent.deadline,
       shareToken: dbEvent.share_token,
@@ -168,6 +172,69 @@ export default function EventDashboardPage() {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [scheduledInterviews, setScheduledInterviews] = useState<any[]>([])
   const [isGeneratingSchedule, setIsGeneratingSchedule] = useState(false)
+  const [selectedInterviews, setSelectedInterviews] = useState<Set<string>>(new Set())
+  const [selectAll, setSelectAll] = useState(false)
+  const [sessionLocations, setSessionLocations] = useState<{[sessionId: string]: string}>({})
+  const [editingLocation, setEditingLocation] = useState<string | null>(null)
+  
+  // 리마인더 메일 관련 상태
+  const [showReminderPreview, setShowReminderPreview] = useState(false)
+  const [reminderType, setReminderType] = useState<"all" | "unresponded" | string>("unresponded")
+  const [reminderRecipients, setReminderRecipients] = useState<Array<{name: string, email: string}>>([])
+  const [isSendingReminder, setIsSendingReminder] = useState(false)
+
+  // 확정 메일 관련 상태
+  const [showConfirmationPreview, setShowConfirmationPreview] = useState(false)
+  const [confirmationData, setConfirmationData] = useState<any>(null)
+  const [confirmationRecipients, setConfirmationRecipients] = useState<Array<{name: string, email: string}>>([])
+  const [isSendingConfirmation, setIsSendingConfirmation] = useState(false)
+
+  // Format time ranges by merging consecutive slots
+  const formatTimeRanges = (slots: Array<{ startTime: string; endTime: string; date: string }>) => {
+    if (slots.length === 0) return ""
+
+    // Group by date first
+    const groupedByDate: { [key: string]: Array<{ startTime: string; endTime: string }> } = {}
+    slots.forEach(slot => {
+      if (!groupedByDate[slot.date]) {
+        groupedByDate[slot.date] = []
+      }
+      groupedByDate[slot.date].push({ startTime: slot.startTime, endTime: slot.endTime })
+    })
+
+    // Format each date group
+    const dateResults: string[] = []
+    Object.entries(groupedByDate).forEach(([date, timeSlots]) => {
+      // Sort slots by start time
+      const sortedSlots = timeSlots.sort((a, b) => a.startTime.localeCompare(b.startTime))
+      
+      const ranges: string[] = []
+      let rangeStart = sortedSlots[0].startTime
+      let currentEnd = sortedSlots[0].endTime
+
+      // Find consecutive slots and merge them
+      for (let i = 1; i < sortedSlots.length; i++) {
+        const currentStart = sortedSlots[i].startTime
+        const nextEnd = sortedSlots[i].endTime
+        
+        if (currentEnd === currentStart) {
+          // Consecutive slot - extend current range
+          currentEnd = nextEnd
+        } else {
+          // Non-consecutive slot - save current range and start new one
+          ranges.push(`${rangeStart}-${currentEnd}`)
+          rangeStart = currentStart
+          currentEnd = nextEnd
+        }
+      }
+      ranges.push(`${rangeStart}-${currentEnd}`) // Add the last range
+
+      dateResults.push(`${date} ${ranges.join(", ")}`)
+    })
+
+    return dateResults.join(" | ")
+  }
+
 
   const loadEventData = async () => {
     setLoading(true)
@@ -182,6 +249,19 @@ export default function EventDashboardPage() {
           const scheduleResult = await getScheduledInterviews(eventId)
           if (scheduleResult.success) {
             setScheduledInterviews(scheduleResult.data)
+            
+            // 장소 정보 로드
+            const locationMap: {[sessionId: string]: string} = {}
+            scheduleResult.data.forEach((interview: any) => {
+              if (interview.session_id) {
+                if (interview.meeting_room) {
+                  locationMap[interview.session_id] = interview.meeting_room
+                } else if (!locationMap[interview.session_id]) {
+                  locationMap[interview.session_id] = ''
+                }
+              }
+            })
+            setSessionLocations(locationMap)
           }
         }
       } else {
@@ -272,14 +352,246 @@ export default function EventDashboardPage() {
   }
 
   const handleSendReminder = (type: "all" | "unresponded" | string) => {
+    if (!event) return
+    
+    let recipients: Array<{name: string, email: string}> = []
+    
     if (type === "all") {
-      toast.success(`모든 지원자 ${event.candidates.length}명에게 리마인드를 발송했습니다! (Mock)`)
+      recipients = event.candidates.map(c => ({ name: c.name, email: c.email }))
     } else if (type === "unresponded") {
-      toast.success(`미응답 지원자 ${unrespondedCandidates.length}명에게 리마인드를 발송했습니다! (Mock)`)
+      recipients = unrespondedCandidates.map(c => ({ name: c.name, email: c.email }))
     } else {
       const candidate = event.candidates.find((c) => c.id === type)
-      toast.success(`${candidate?.name}님에게 리마인드를 발송했습니다! (Mock)`)
+      if (candidate) {
+        recipients = [{ name: candidate.name, email: candidate.email }]
+      }
     }
+    
+    if (recipients.length === 0) {
+      toast.error("발송할 대상이 없습니다.")
+      return
+    }
+    
+    setReminderType(type)
+    setReminderRecipients(recipients)
+    setShowReminderPreview(true)
+  }
+
+  const handleReminderSend = async (customTemplate?: CustomEmailTemplate) => {
+    if (!event || reminderRecipients.length === 0) return
+    
+    setIsSendingReminder(true)
+    try {
+      // customTemplate이 없으면 에러 발생시켜서 미리보기를 강제로 사용하게 함
+      if (!customTemplate) {
+        toast.error('미리보기 템플릿이 생성되지 않았습니다. 다시 시도해주세요.')
+        setIsSendingReminder(false)
+        return
+      }
+
+      // 미리보기에서 생성된 템플릿을 사용하여 발송 (100% 보장)
+      const interviewData = {
+        title: event.eventName,
+        organizerName: event.organizerName,
+        organizerEmail: event.organizerEmail,
+        deadlineDate: event.deadline,
+        eventId: event.id,
+        customTemplate // 반드시 미리보기 템플릿 사용
+      }
+      
+      console.log('Sending reminder with customTemplate:', customTemplate.subject)
+      const result = await sendReminderEmails(reminderRecipients, interviewData)
+      
+      if (result.success) {
+        toast.success(`${result.sent}명에게 리마인드 메일을 발송했습니다!`)
+        setShowReminderPreview(false)
+      } else {
+        toast.error(`메일 발송에 실패했습니다: ${result.failed}명 실패`)
+      }
+    } catch (error) {
+      console.error('Error sending reminder emails:', error)
+      toast.error('리마인드 메일 발송 중 오류가 발생했습니다.')
+    } finally {
+      setIsSendingReminder(false)
+    }
+  }
+
+  const handleBulkEmailPreview = (sessionId: string, candidateIds: string[]) => {
+    if (!event) return
+
+    // 세션 정보 찾기
+    const sessionInterviews = scheduledInterviews.filter(
+      (interview: any) => interview.session_id === sessionId
+    )
+
+    if (sessionInterviews.length === 0) {
+      toast.error('해당 세션의 면접 정보를 찾을 수 없습니다.')
+      return
+    }
+
+    const sampleInterview = sessionInterviews[0]
+    
+    // 날짜/시간 포맷팅
+    const scheduledDate = new Date(sampleInterview.scheduled_date).toLocaleDateString('ko-KR', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      weekday: 'long',
+      timeZone: 'Asia/Seoul'
+    })
+    
+    const scheduledTime = `${sampleInterview.scheduled_start_time.substring(0, 5)} - ${sampleInterview.scheduled_end_time.substring(0, 5)}`
+
+    // 수신자 정보 준비
+    const recipients = sessionInterviews.map((interview: any) => ({
+      name: interview.candidates?.name || '지원자',
+      email: interview.candidates?.email || ''
+    })).filter(r => r.email)
+
+    if (recipients.length === 0) {
+      toast.error('이메일을 보낼 수 있는 지원자가 없습니다.')
+      return
+    }
+
+    // 확정 메일 데이터 설정
+    setConfirmationData({
+      title: event.eventName,
+      organizerName: event.organizerName,
+      organizerEmail: event.organizerEmail,
+      scheduledDate,
+      scheduledTime,
+      meetingLocation: sessionLocations[sessionId] || undefined,
+      meetingLink: sampleInterview.meeting_link || undefined
+    })
+    setConfirmationRecipients(recipients)
+    setShowConfirmationPreview(true)
+  }
+
+  const handleConfirmationSend = async (customTemplate?: CustomEmailTemplate) => {
+    if (!confirmationData || confirmationRecipients.length === 0) return
+    
+    setIsSendingConfirmation(true)
+    try {
+      if (confirmationData.isBulkSend) {
+        // 벌크 발송 - 각 지원자별로 개별 일정 정보로 메일 발송
+        let successCount = 0
+        let failCount = 0
+
+        for (const interview of scheduledInterviews) {
+          if (!interview.candidates?.email) continue
+
+          const scheduledDate = new Date(interview.scheduled_date).toLocaleDateString('ko-KR', {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+            weekday: 'long',
+            timeZone: 'Asia/Seoul'
+          })
+          
+          const scheduledTime = `${interview.scheduled_start_time.substring(0, 5)} - ${interview.scheduled_end_time.substring(0, 5)}`
+
+          try {
+            const result = await sendConfirmationEmails(
+              [{ name: interview.candidates.name, email: interview.candidates.email }], 
+              {
+                title: confirmationData.title,
+                organizerName: confirmationData.organizerName,
+                organizerEmail: confirmationData.organizerEmail,
+                scheduledDate,
+                scheduledTime,
+                meetingLocation: sessionLocations[interview.session_id] || undefined,
+                meetingLink: interview.meeting_link || undefined,
+                customTemplate
+              }
+            )
+            if (result.success) successCount++
+            else failCount++
+          } catch (error) {
+            failCount++
+          }
+        }
+
+        if (failCount === 0) {
+          toast.success(`전체 ${successCount}명에게 확정 메일을 발송했습니다!`)
+        } else {
+          toast.success(`확정 메일 발송 완료: 성공 ${successCount}명, 실패 ${failCount}명`)
+        }
+        setShowConfirmationPreview(false)
+      } else {
+        // 단일 세션 발송
+        const result = await sendConfirmationEmails(confirmationRecipients, {
+          ...confirmationData,
+          customTemplate
+        })
+
+        if (result.success) {
+          toast.success(`${result.sent}명에게 확정 메일을 발송했습니다!`)
+          setShowConfirmationPreview(false)
+        } else {
+          toast.error(`메일 발송에 실패했습니다: ${result.failed}명 실패`)
+        }
+      }
+    } catch (error) {
+      console.error('Error sending confirmation emails:', error)
+      toast.error('확정 메일 발송 중 오류가 발생했습니다.')
+    } finally {
+      setIsSendingConfirmation(false)
+    }
+  }
+
+  const handleLocationUpdate = async (sessionId: string, location: string) => {
+    try {
+      const result = await updateSessionLocation(sessionId, location)
+      
+      if (result.success) {
+        toast.success('장소 정보가 저장되었습니다!')
+      } else {
+        toast.error(`장소 정보 저장에 실패했습니다: ${result.error}`)
+      }
+    } catch (error) {
+      console.error('Error updating location:', error)
+      toast.error('장소 정보 저장 중 오류가 발생했습니다.')
+    }
+  }
+
+  // 세션별 데이터 준비
+  const getSessionGroups = () => {
+    if (!scheduledInterviews || scheduledInterviews.length === 0) {
+      return []
+    }
+
+    // 세션별로 그룹핑
+    const sessionMap = new Map()
+    
+    scheduledInterviews.forEach(interview => {
+      const sessionId = interview.session_id
+      
+      if (!sessionMap.has(sessionId)) {
+        sessionMap.set(sessionId, {
+          sessionId,
+          date: interview.scheduled_date,
+          startTime: interview.scheduled_start_time,
+          endTime: interview.scheduled_end_time,
+          candidates: []
+        })
+      }
+      
+      if (interview.candidates) {
+        sessionMap.get(sessionId).candidates.push({
+          id: interview.candidates.id,
+          name: interview.candidates.name,
+          email: interview.candidates.email,
+          phone: interview.candidates.phone
+        })
+      }
+    })
+
+    return Array.from(sessionMap.values()).sort((a, b) => {
+      // 날짜순, 시간순으로 정렬
+      const dateCompare = new Date(a.date).getTime() - new Date(b.date).getTime()
+      if (dateCompare !== 0) return dateCompare
+      return a.startTime.localeCompare(b.startTime)
+    })
   }
 
 
@@ -371,54 +683,51 @@ export default function EventDashboardPage() {
     setShowDeleteDialog(false)
   }
 
+  // 체크박스 관리 함수들
+  const handleSelectAll = (checked: boolean) => {
+    setSelectAll(checked)
+    if (checked) {
+      const allIds = new Set(scheduledInterviews.map(interview => interview.candidate_id))
+      setSelectedInterviews(allIds)
+    } else {
+      setSelectedInterviews(new Set())
+    }
+  }
+
+  const handleSelectInterview = (candidateId: string, checked: boolean) => {
+    const newSelected = new Set(selectedInterviews)
+    if (checked) {
+      newSelected.add(candidateId)
+    } else {
+      newSelected.delete(candidateId)
+    }
+    setSelectedInterviews(newSelected)
+    
+    // 전체 선택 상태 업데이트
+    const uniqueCandidateIds = new Set(scheduledInterviews.map(interview => interview.candidate_id))
+    setSelectAll(newSelected.size === uniqueCandidateIds.size && uniqueCandidateIds.size > 0)
+  }
+
   return (
     <ProtectedRoute>
       <div className="min-h-screen bg-gray-50">
       {/* Header */}
       <AppHeader>
-        <div className="flex items-center justify-between w-full">
-            <div className="flex items-center gap-4">
-              <Link
-                href="/events"
-                className="inline-flex items-center gap-2 px-3 py-2 text-gray-600 hover:text-gray-900 transition-colors"
-              >
-                <ArrowLeft className="w-4 h-4" />
-                이벤트 목록
-              </Link>
-              <div className="h-6 w-px bg-gray-300" />
-              <h1 className="text-xl font-semibold text-gray-900">{event.eventName}</h1>
-              <span
-                className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(event.status)}`}
-              >
-                {getStatusText(event.status)}
-              </span>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setShowEditModal(true)}
-                className="inline-flex items-center gap-2 px-3 py-2 text-gray-600 hover:text-gray-900 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-              >
-                <Edit className="w-4 h-4" />
-                수정
-              </button>
-              {event.status === "collecting" && (
-                <button
-                  onClick={() => setShowCloseDialog(true)}
-                  className="inline-flex items-center gap-2 px-3 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors"
-                >
-                  <Settings className="w-4 h-4" />
-                  마감
-                </button>
-              )}
-              <button
-                onClick={() => setShowDeleteDialog(true)}
-                className="inline-flex items-center gap-2 px-3 py-2 text-red-600 hover:text-red-900 border border-red-300 rounded-lg hover:bg-red-50 transition-colors"
-              >
-                <Trash2 className="w-4 h-4" />
-                삭제
-              </button>
-            </div>
+        <div className="flex items-center gap-4 w-full">
+          <Link
+            href="/events"
+            className="inline-flex items-center gap-2 px-3 py-2 text-gray-600 hover:text-gray-900 transition-colors flex-shrink-0"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            <span className="hidden sm:inline">이벤트 목록</span>
+          </Link>
+          <div className="h-6 w-px bg-gray-300 hidden sm:block" />
+          <h1 className="text-lg sm:text-xl font-semibold text-gray-900 truncate">{event.eventName}</h1>
+          <span
+            className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(event.status)} flex-shrink-0`}
+          >
+            {getStatusText(event.status)}
+          </span>
         </div>
       </AppHeader>
 
@@ -427,7 +736,27 @@ export default function EventDashboardPage() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Basic Info */}
           <div className="bg-white border border-gray-200 rounded-lg p-6">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">기본 정보</h3>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">기본 정보</h3>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setShowEditModal(true)}
+                  className="inline-flex items-center gap-2 px-3 py-2 text-gray-600 hover:text-gray-900 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                >
+                  <Edit className="w-4 h-4" />
+                  <span className="hidden sm:inline">수정</span>
+                </button>
+                {event.status === "collecting" && (
+                  <button
+                    onClick={() => setShowCloseDialog(true)}
+                    className="inline-flex items-center gap-2 px-3 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors"
+                  >
+                    <Settings className="w-4 h-4" />
+                    <span className="hidden sm:inline">마감</span>
+                  </button>
+                )}
+              </div>
+            </div>
             <div className="space-y-4">
               <div>
                 <p className="text-sm text-gray-600">생성일</p>
@@ -436,6 +765,7 @@ export default function EventDashboardPage() {
                     year: "numeric",
                     month: "long",
                     day: "numeric",
+                    timeZone: "Asia/Seoul"
                   })}
                 </p>
               </div>
@@ -451,7 +781,17 @@ export default function EventDashboardPage() {
               </div>
               <div>
                 <p className="text-sm text-gray-600">마감 일시</p>
-                <p className="font-medium text-gray-900">{new Date(event.deadline).toLocaleString("ko-KR")}</p>
+                <p className="font-medium text-gray-900">
+                  {new Date(event.deadline).toLocaleString("ko-KR", {
+                    year: "numeric",
+                    month: "long", 
+                    day: "numeric",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    weekday: "short",
+                    timeZone: "Asia/Seoul"
+                  })}
+                </p>
               </div>
               <div>
                 <p className="text-sm text-gray-600">주최자</p>
@@ -509,8 +849,9 @@ export default function EventDashboardPage() {
                     </>
                   ) : (
                     <>
-                      <CheckCircle className="w-4 h-4" />
-                      일정 자동 배정
+                      <CheckCircle className="w-4 h-4 flex-shrink-0" />
+                      <span className="hidden sm:inline">일정 자동 배정</span>
+                      <span className="sm:hidden">배정</span>
                     </>
                   )}
                 </button>
@@ -519,86 +860,274 @@ export default function EventDashboardPage() {
                 onClick={handleCopyShareLink}
                 className="w-full bg-purple-600 hover:bg-purple-700 text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center justify-center gap-2"
               >
-                <LinkIcon className="w-4 h-4" />
-                링크 복사
+                <LinkIcon className="w-4 h-4 flex-shrink-0" />
+                <span className="hidden sm:inline">링크 복사</span>
+                <span className="sm:hidden">복사</span>
               </button>
               <button
                 onClick={() => handleSendReminder("unresponded")}
                 disabled={unrespondedCandidates.length === 0}
                 className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center justify-center gap-2"
               >
-                <Send className="w-4 h-4" />
-                미응답자 리마인드 ({unrespondedCandidates.length}명)
+                <Send className="w-4 h-4 flex-shrink-0" />
+                <span className="hidden sm:inline">미응답자 리마인드 ({unrespondedCandidates.length}명)</span>
+                <span className="sm:hidden">리마인드 ({unrespondedCandidates.length})</span>
               </button>
               <button
                 onClick={() => handleSendReminder("all")}
                 className="w-full bg-gray-600 hover:bg-gray-700 text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center justify-center gap-2"
               >
-                <Mail className="w-4 h-4" />
-                전체 리마인드
+                <Mail className="w-4 h-4 flex-shrink-0" />
+                <span className="hidden sm:inline">전체 리마인드</span>
+                <span className="sm:hidden">전체</span>
               </button>
             </div>
           </div>
         </div>
 
-        {/* Scheduled Results */}
+        {/* Scheduled Results - Horizontal Table Layout */}
         {event.status === 'scheduled' && scheduledInterviews.length > 0 && (
-          <div className="mt-8 bg-white border border-gray-200 rounded-lg p-6">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">배정된 일정</h3>
+          <div className="mt-8 bg-white border border-gray-200 rounded-lg overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-200">
+              <h3 className="text-lg font-semibold text-gray-900">배정된 일정</h3>
+            </div>
+            
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead className="bg-gray-50">
                   <tr>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      세션 ID
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-12">
+                      <input 
+                        type="checkbox" 
+                        className="rounded border-gray-300"
+                        checked={selectAll}
+                        onChange={(e) => handleSelectAll(e.target.checked)}
+                      />
                     </th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-16">
+                      면접 세션
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       지원자
                     </th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      날짜
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      이메일
                     </th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      시간
-                    </th>
-                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       연락처
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      장소
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      상태
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      액션
                     </th>
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {scheduledInterviews.map((interview, index) => (
-                    <tr key={index}>
-                      <td className="px-4 py-4 whitespace-nowrap">
-                        <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                          {interview.session_id}
-                        </span>
-                      </td>
-                      <td className="px-4 py-4 whitespace-nowrap">
-                        <div className="font-medium text-gray-900">{interview.candidates?.name}</div>
-                      </td>
-                      <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-600">
-                        {new Date(interview.scheduled_date).toLocaleDateString("ko-KR")}
-                      </td>
-                      <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-600">
-                        {interview.scheduled_start_time} - {interview.scheduled_end_time}
-                      </td>
-                      <td className="px-4 py-4 whitespace-nowrap text-sm text-gray-600">
-                        <div>{interview.candidates?.email}</div>
-                        <div className="text-xs text-gray-500">{interview.candidates?.phone}</div>
-                      </td>
-                    </tr>
-                  ))
-                  })}
+                  {(() => {
+                    // 세션별로 그룹화
+                    const sessionGroups = scheduledInterviews.reduce((groups: any, interview: any) => {
+                      const sessionId = interview.session_id
+                      if (!groups[sessionId]) {
+                        groups[sessionId] = {
+                          session_id: sessionId,
+                          scheduled_date: interview.scheduled_date,
+                          scheduled_start_time: interview.scheduled_start_time,
+                          scheduled_end_time: interview.scheduled_end_time,
+                          candidates: []
+                        }
+                      }
+                      groups[sessionId].candidates.push({
+                        candidate_id: interview.candidate_id,
+                        name: interview.candidates?.name,
+                        email: interview.candidates?.email,
+                        phone: interview.candidates?.phone
+                      })
+                      return groups
+                    }, {})
+
+                    return Object.values(sessionGroups).map((session: any, index: number) => (
+                      <tr key={`session-${session.session_id}-${index}`} className="hover:bg-gray-50">
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <input 
+                            type="checkbox" 
+                            className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                            checked={session.candidates.every((candidate: any) => selectedInterviews.has(candidate.candidate_id))}
+                            onChange={(e) => {
+                              session.candidates.forEach((candidate: any) => {
+                                handleSelectInterview(candidate.candidate_id, e.target.checked)
+                              })
+                            }}
+                          />
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="space-y-1">
+                            <div className="text-sm font-medium text-gray-900">
+                              {new Date(session.scheduled_date).toLocaleDateString('ko-KR', {
+                                month: 'short',
+                                day: 'numeric',
+                                weekday: 'short',
+                                timeZone: 'Asia/Seoul'
+                              })}
+                            </div>
+                            <div className="text-xs text-gray-600">
+                              {session.scheduled_start_time.substring(0, 5)} - {session.scheduled_end_time.substring(0, 5)}
+                            </div>
+                            <div className="text-xs text-gray-500">
+                              #{index + 1}
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="space-y-1">
+                            {session.candidates.map((candidate: any, idx: number) => (
+                              <div key={`${session.session_id}-${candidate.candidate_id}-${idx}`} className="font-medium text-gray-900 text-sm">
+                                {candidate.name}
+                              </div>
+                            ))}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="space-y-1">
+                            {session.candidates.map((candidate: any, idx: number) => (
+                              <div key={`${session.session_id}-${candidate.candidate_id}-${idx}`} className="text-sm text-gray-600">
+                                {candidate.email}
+                              </div>
+                            ))}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="space-y-1">
+                            {session.candidates.map((candidate: any, idx: number) => (
+                              <div key={`${session.session_id}-${candidate.candidate_id}-${idx}`} className="text-sm text-gray-600">
+                                {candidate.phone}
+                              </div>
+                            ))}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap w-32">
+                          {editingLocation === session.session_id ? (
+                            <input
+                              type="text"
+                              value={sessionLocations[session.session_id] || ''}
+                              onChange={(e) => setSessionLocations({...sessionLocations, [session.session_id]: e.target.value})}
+                              onBlur={() => {
+                                handleLocationUpdate(session.session_id, sessionLocations[session.session_id] || '')
+                                setEditingLocation(null)
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  handleLocationUpdate(session.session_id, sessionLocations[session.session_id] || '')
+                                  setEditingLocation(null)
+                                }
+                              }}
+                              placeholder="회의실"
+                              className="w-24 px-2 py-1 text-sm border border-gray-300 rounded focus:ring-blue-500 focus:border-blue-500"
+                              autoFocus
+                            />
+                          ) : (
+                            <div
+                              onClick={() => setEditingLocation(session.session_id)}
+                              className="text-sm text-gray-600 cursor-pointer hover:bg-gray-50 px-2 py-1 rounded min-h-[24px] flex items-center w-24 truncate"
+                              title={sessionLocations[session.session_id] || '장소 입력'}
+                            >
+                              {sessionLocations[session.session_id] || '장소 입력'}
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                            <CheckCircle className="w-3 h-3" />
+                            배정 완료 ({session.candidates.length}명)
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => handleBulkEmailPreview(session.session_id, session.candidates.map((c: any) => c.candidate_id))}
+                              className="text-blue-600 hover:text-blue-900 text-sm font-medium"
+                            >
+                              세션 메일 발송
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  })()}
                 </tbody>
               </table>
+            </div>
+
+            {/* Bulk Actions */}
+            <div className="px-6 py-4 bg-gray-50 border-t border-gray-200">
+              <div className="flex items-center justify-between">
+                <div className="text-sm text-gray-600">
+                  총 {scheduledInterviews.length}명의 지원자, {Object.keys(scheduledInterviews.reduce((groups: any, interview: any) => {
+                    groups[interview.session_id] = true
+                    return groups
+                  }, {})).length}개 세션
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                      if (!event) return
+
+                      // 모든 세션의 수신자 정보 준비
+                      const allRecipients = scheduledInterviews.map((interview: any) => ({
+                        name: interview.candidates?.name || '지원자',
+                        email: interview.candidates?.email || ''
+                      })).filter(r => r.email)
+
+                      if (allRecipients.length === 0) {
+                        toast.error('이메일을 보낼 수 있는 지원자가 없습니다.')
+                        return
+                      }
+
+                      // 첫 번째 인터뷰 정보로 미리보기 설정
+                      const firstInterview = scheduledInterviews[0]
+                      const scheduledDate = new Date(firstInterview.scheduled_date).toLocaleDateString('ko-KR', {
+                        year: 'numeric',
+                        month: 'long',
+                        day: 'numeric',
+                        weekday: 'long',
+                        timeZone: 'Asia/Seoul'
+                      })
+                      
+                      const scheduledTime = `${firstInterview.scheduled_start_time.substring(0, 5)} - ${firstInterview.scheduled_end_time.substring(0, 5)}`
+                      
+                      setConfirmationData({
+                        title: event.eventName,
+                        organizerName: event.organizerName,
+                        organizerEmail: event.organizerEmail,
+                        scheduledDate,
+                        scheduledTime,
+                        meetingLocation: sessionLocations[firstInterview.session_id] || undefined,
+                        meetingLink: firstInterview.meeting_link || undefined,
+                        isBulkSend: true
+                      })
+                      
+                      setConfirmationRecipients(allRecipients)
+                      setShowConfirmationPreview(true)
+                    }}
+                    className="flex items-center gap-2 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors"
+                  >
+                    <Mail className="w-4 h-4 flex-shrink-0" />
+                    <span className="hidden sm:inline">확정 메일 발송</span>
+                    <span className="sm:hidden">전체 메일</span>
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         )}
 
         {/* Candidates List */}
-        <div className="mt-8 bg-white border border-gray-200 rounded-lg p-6">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">지원자 목록</h3>
+          <div className="mt-8 bg-white border border-gray-200 rounded-lg p-6">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">지원자 목록</h3>
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead className="bg-gray-50">
@@ -642,12 +1171,8 @@ export default function EventDashboardPage() {
                     </td>
                     <td className="px-4 py-4">
                       {candidate.selectedTimes.length > 0 ? (
-                        <div className="space-y-1">
-                          {candidate.selectedTimes.map((time, index) => (
-                            <div key={index} className="text-xs text-gray-600 bg-gray-100 px-2 py-1 rounded">
-                              {time.date} {time.startTime}-{time.endTime}
-                            </div>
-                          ))}
+                        <div className="text-xs text-gray-600">
+                          {formatTimeRanges(candidate.selectedTimes)}
                         </div>
                       ) : (
                         <span className="text-sm text-gray-400">선택한 시간 없음</span>
@@ -666,7 +1191,7 @@ export default function EventDashboardPage() {
               </tbody>
             </table>
           </div>
-        </div>
+          </div>
 
         {/* Edit Modal */}
         {event && (
@@ -706,6 +1231,51 @@ export default function EventDashboardPage() {
           cancelText="취소"
           destructive
         />
+
+        {/* Reminder Email Preview Modal */}
+        {event && (
+          <EmailPreviewModal
+            isOpen={showReminderPreview}
+            onClose={() => setShowReminderPreview(false)}
+            onSave={handleReminderSend}
+            interviewData={{
+              eventName: event.eventName,
+              organizerName: event.organizerName,
+              organizerEmail: event.organizerEmail,
+              deadlineDate: event.deadline,
+              eventId: event.id
+            }}
+            candidateName={reminderRecipients[0]?.name || "지원자"}
+            fromName={event.organizerName}
+            fromEmail={event.organizerEmail}
+            isReminder={true}
+            recipients={reminderRecipients}
+          />
+        )}
+
+        {/* Confirmation Email Preview Modal */}
+        {event && confirmationData && (
+          <EmailPreviewModal
+            isOpen={showConfirmationPreview}
+            onClose={() => setShowConfirmationPreview(false)}
+            onSave={handleConfirmationSend}
+            confirmationData={confirmationData}
+            candidateName={confirmationRecipients[0]?.name || "지원자"}
+            fromName={event.organizerName}
+            fromEmail={event.organizerEmail}
+            isConfirmation={true}
+            recipients={confirmationRecipients}
+          />
+        )}
+        
+        {/* Delete Button - Fixed Bottom Right */}
+        <button
+          onClick={() => setShowDeleteDialog(true)}
+          className="fixed bottom-6 right-6 inline-flex items-center gap-2 px-4 py-3 bg-red-600 text-white rounded-full shadow-lg hover:bg-red-700 transition-all hover:shadow-xl z-50"
+        >
+          <Trash2 className="w-5 h-5" />
+          <span className="hidden sm:inline font-medium">삭제</span>
+        </button>
       </div>
     </div>
     </ProtectedRoute>

@@ -11,9 +11,8 @@ interface TimeSlotListProps {
 
 export default function TimeSlotList({ timeSlots, selectedSlots, onSlotSelect }: TimeSlotListProps) {
   return (
-    <div className="flex-1 min-h-0 border border-gray-200 rounded-lg overflow-hidden">
-      <div className="h-full overflow-y-auto">
-        <div className="p-3 space-y-2">
+    <div className="h-full overflow-y-scroll pr-2">
+      <div className="space-y-2">
           {timeSlots.map((slot) => {
             const isSelected = selectedSlots.includes(slot.id)
 
@@ -35,7 +34,6 @@ export default function TimeSlotList({ timeSlots, selectedSlots, onSlotSelect }:
             )
           })}
         </div>
-      </div>
     </div>
   )
 }

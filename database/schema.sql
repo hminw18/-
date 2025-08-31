@@ -1,4 +1,4 @@
--- InterviewSync Database Schema
+-- Hansee   Database Schema
 -- PostgreSQL 15+ compatible
 
 -- Enable UUID extension
@@ -8,6 +8,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE TABLE interview_events (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     event_name VARCHAR(255) NOT NULL,
+    organizer_name VARCHAR(255) NOT NULL,
     organizer_email VARCHAR(255) NOT NULL,
     interview_length INTEGER NOT NULL CHECK (interview_length > 0), -- 분 단위
     simultaneous_count INTEGER NOT NULL DEFAULT 1 CHECK (simultaneous_count > 0),

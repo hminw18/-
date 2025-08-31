@@ -20,7 +20,7 @@ export default function ErrorState({ message, onRetry }: ErrorStateProps) {
           />
         </svg>
       </div>
-      <h3 className="text-sm font-medium text-gray-900 mb-2">Booking Failed</h3>
+      <h3 className="text-sm font-medium text-gray-900 mb-2">예약 실패</h3>
       <p className="text-gray-600 text-xs mb-4">{message}</p>
       <motion.button
         onClick={onRetry}
@@ -28,7 +28,7 @@ export default function ErrorState({ message, onRetry }: ErrorStateProps) {
         whileTap={{ scale: 0.98 }}
         className="bg-primary hover:bg-primary-hover text-white font-medium py-1 px-3 rounded-md text-sm transition-colors"
       >
-        Try Again
+        다시 시도
       </motion.button>
     </div>
   )

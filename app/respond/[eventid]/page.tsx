@@ -15,10 +15,26 @@ export default function RespondPage() {
 
   useEffect(() => {
     async function loadEventData() {
-      console.log('Loading event data for shareToken:', shareToken)
+      console.log('=== DEBUG START ===')
+      console.log('User agent:', navigator.userAgent)
+      console.log('URL:', window.location.href)
+      console.log('Params object:', params)
+      console.log('ShareToken type:', typeof shareToken)
+      console.log('ShareToken value:', shareToken)
+      console.log('ShareToken length:', shareToken?.length)
+      
+      if (!shareToken || shareToken.trim() === '') {
+        console.error('ShareToken is empty or invalid')
+        setError('잘못된 링크입니다.')
+        setLoading(false)
+        return
+      }
+      
       try {
-        const result = await getInterviewEventByShareToken(shareToken)
+        console.log('Making database request...')
+        const result = await getInterviewEventByShareToken(shareToken.trim())
         console.log('DB result:', result)
+        
         if (result.success && result.event) {
           console.log('Event loaded successfully:', result.event)
           setEventData(result.event)
@@ -28,14 +44,20 @@ export default function RespondPage() {
         }
       } catch (err) {
         console.error('Error loading event:', err)
+        console.error('Error details:', JSON.stringify(err, null, 2))
         setError('이벤트 로딩 중 오류가 발생했습니다.')
       } finally {
+        console.log('=== DEBUG END ===')
         setLoading(false)
       }
     }
 
     if (shareToken) {
       loadEventData()
+    } else {
+      console.error('No shareToken provided')
+      setError('잘못된 링크입니다.')
+      setLoading(false)
     }
   }, [shareToken])
 
@@ -53,9 +75,17 @@ export default function RespondPage() {
   if (error || !eventData) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
+        <div className="text-center max-w-md mx-auto p-6">
           <h1 className="text-2xl font-bold text-gray-900 mb-4">오류 발생</h1>
           <p className="text-gray-600 mb-6">{error || '이벤트를 찾을 수 없습니다.'}</p>
+          
+          {/* DEBUG INFO - 프로덕션에서는 제거 */}
+          <div className="mt-6 p-4 bg-gray-100 rounded text-left text-xs">
+            <p><strong>URL:</strong> {typeof window !== 'undefined' ? window.location.href : 'server'}</p>
+            <p><strong>ShareToken:</strong> {shareToken || 'undefined'}</p>
+            <p><strong>Params:</strong> {JSON.stringify(params)}</p>
+            <p><strong>User Agent:</strong> {typeof window !== 'undefined' ? navigator.userAgent.substring(0, 50) + '...' : 'server'}</p>
+          </div>
         </div>
       </div>
     )
@@ -63,11 +93,13 @@ export default function RespondPage() {
 
   const experience = {
     title: eventData?.event_name || '',
+    description: eventData?.description || '',
     interviewLength: eventData?.interview_length || 60,
     availableTimeSlots: eventData?.available_time_slots || [],
     status: eventData?.status || 'collecting',
     deadline: eventData?.deadline || '',
     organizerEmail: eventData?.organizer_email || '',
+    timeRange: eventData?.time_range || { startTime: '09:00', endTime: '18:00' },
     dates: eventData?.available_time_slots ? 
       eventData.available_time_slots.map((slot: any, index: number) => ({
         id: slot.id || index.toString(),
@@ -92,12 +124,8 @@ export default function RespondPage() {
 
 
   return (
-    <div className="min-h-screen bg-gray-50 py-12">
-      <div className="w-full px-8">
-        <div className="bg-white rounded-lg shadow-lg p-6 w-full">
-          <VerticalMeetingCalendar experience={experience} eventValid={true} />
-        </div>
-      </div>
+    <div className="min-h-screen bg-gray-50">
+      <VerticalMeetingCalendar experience={experience} eventValid={true} />
     </div>
   )
 }

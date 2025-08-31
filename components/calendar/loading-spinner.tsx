@@ -6,7 +6,7 @@ interface LoadingSpinnerProps {
   message?: string
 }
 
-export default function LoadingSpinner({ message = "Loading..." }: LoadingSpinnerProps) {
+export default function LoadingSpinner({ message = "로딩 중..." }: LoadingSpinnerProps) {
   return (
     <div className="text-center">
       <motion.div

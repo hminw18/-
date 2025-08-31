@@ -16,6 +16,7 @@ import SuccessState from "./components/calendar/success-state"
 import IdentityVerificationDialog from "./components/calendar/identity-verification-dialog"
 import ExistingResponseDialog from "./components/calendar/existing-response-dialog"
 import EventClosedState from "./components/calendar/event-closed-state"
+import useDragSelection from "./hooks/useDragSelection"
 
 interface VerticalMeetingCalendarProps {
   experience: Experience
@@ -36,50 +37,66 @@ export default function VerticalMeetingCalendar({ experience, eventValid = false
   const [existingResponses, setExistingResponses] = useState<SelectedTimeSlot[]>([])
   const [showExistingResponseDialog, setShowExistingResponseDialog] = useState(false)
 
-  const [state, setState] = useState<ComponentState>("date-selection")
-  const [selectedDates, setSelectedDates] = useState<Date[]>([])
-  const [activeDate, setActiveDate] = useState<Date | null>(null)
-  const [selectedTimeSlots, setSelectedTimeSlots] = useState<SelectedTimeSlot[]>([])
-  const [selectedSlot, setSelectedSlot] = useState<string>("")
-  const [currentMonth, setCurrentMonth] = useState(new Date())
-  const [dateTimeSlots, setDateTimeSlots] = useState<{ [key: string]: TimeSlot[] }>({})
+  const [state, setState] = useState<ComponentState>("time-selection")
+  const [availableTimes, setAvailableTimes] = useState<Array<{ date: Date; slots: Array<{ start: string; end: string }> }>>([])
   const [errorMessage, setErrorMessage] = useState("")
+  
+  // Generate dynamic time slots based on event time range
+  const generateTimeSlots = () => {
+    // Use event's configured time range from time_range field
+    const timeRange = experience.timeRange || { startTime: '09:00', endTime: '18:00' }
+    const startHour = parseInt(timeRange.startTime.split(':')[0])
+    const startMinute = parseInt(timeRange.startTime.split(':')[1])
+    const endHour = parseInt(timeRange.endTime.split(':')[0])
+    const endMinute = parseInt(timeRange.endTime.split(':')[1])
 
-  useEffect(() => {
-    setCurrentMonth(new Date())
-  }, [])
-
-  useEffect(() => {
-    if (selectedDates.length > 0 && Object.keys(dateTimeSlots).length === 0 && isAuthenticated) {
-      setState("loading")
-      setTimeout(() => {
-        const newDateTimeSlots: { [key: string]: TimeSlot[] } = {}
-        selectedDates.forEach((date) => {
-          const dateKey = formatDateForDB(date)
-          
-          // Check if there are available time slots for this date
-          const availableSlotsForDate = experience.availableTimeSlots?.filter((slot: any) => {
-            return slot.date === dateKey
-          }) || []
-
-          if (availableSlotsForDate.length > 0) {
-            // Convert available time slots to TimeSlot format
-            newDateTimeSlots[dateKey] = availableSlotsForDate.map((slot: any, index: number) => ({
-              id: `${slot.id || index}`,
-              time: `${slot.start_time} - ${slot.end_time}`,
-              startTime: slot.start_time,
-              endTime: slot.end_time
-            }))
-          } else {
-            // No available slots for this date
-            newDateTimeSlots[dateKey] = []
-          }
-        })
-        setDateTimeSlots(newDateTimeSlots)
-        setState("time-selection")
-      }, 500)
+    const slots = []
+    
+    for (let hour = startHour; hour < endHour || (hour === endHour && startMinute === 0); hour++) {
+      for (let minute = 0; minute < 60; minute += 30) {
+        if (hour === endHour && minute >= endMinute) break
+        
+        const timeString = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`
+        slots.push(timeString)
+      }
     }
-  }, [selectedDates.length, Object.keys(dateTimeSlots).length, isAuthenticated, experience.availableTimeSlots])
+    
+    return slots
+  }
+
+  const [timeSlots, setTimeSlots] = useState<string[]>([])
+
+  // Process available time slots from experience data
+  useEffect(() => {
+    if (isAuthenticated && experience.availableTimeSlots) {
+      // Group available slots by date
+      const processedTimes: { [key: string]: Array<{ start: string; end: string }> } = {}
+      
+      experience.availableTimeSlots.forEach((slot: any) => {
+        const dateKey = slot.date
+        if (!processedTimes[dateKey]) {
+          processedTimes[dateKey] = []
+        }
+        processedTimes[dateKey].push({
+          start: slot.start_time,
+          end: slot.end_time
+        })
+      })
+
+      // Convert to availableTimes format with Date objects
+      const newAvailableTimes = Object.entries(processedTimes).map(([dateStr, slots]) => ({
+        date: parseDateFromDB(dateStr),
+        slots: slots.sort((a, b) => a.start.localeCompare(b.start))
+      })).sort((a, b) => a.date.getTime() - b.date.getTime())
+
+      setAvailableTimes(newAvailableTimes)
+    }
+  }, [isAuthenticated, experience.availableTimeSlots])
+
+  // Update time slots when available times change
+  useEffect(() => {
+    setTimeSlots(generateTimeSlots())
+  }, [availableTimes])
 
   const verifyIdentityInDB = async (name: string, phone: string): Promise<any> => {
     try {
@@ -122,24 +139,16 @@ export default function VerticalMeetingCalendar({ experience, eventValid = false
         
         // Check if candidate has already responded
         if (candidate.has_responded && candidate.candidate_time_selections?.length > 0) {
-          // Load existing responses
+          // Store existing selections for dialog
           const existingSelections = candidate.candidate_time_selections.map((selection: any) => ({
             date: parseDateFromDB(selection.selected_date),
             slotId: `${selection.selected_date}-${selection.selected_start_time}`,
             time: `${selection.selected_start_time} - ${selection.selected_end_time}`,
             startTime: selection.selected_start_time,
             endTime: selection.selected_end_time
-          })).sort((a, b) => {
-            // 먼저 날짜로 정렬
-            const dateComparison = a.date.getTime() - b.date.getTime()
-            if (dateComparison !== 0) return dateComparison
-            
-            // 같은 날짜라면 시작 시간으로 정렬
-            return a.startTime.localeCompare(b.startTime)
-          })
+          }))
           
           setExistingResponses(existingSelections)
-          setSelectedTimeSlots(existingSelections)
           setShowExistingResponseDialog(true)
         }
         
@@ -153,7 +162,11 @@ export default function VerticalMeetingCalendar({ experience, eventValid = false
   }
 
   const handleSubmit = async () => {
-    if (selectedTimeSlots.length === 0) return
+    const selectedSlots = getSelectedTimeSlots()
+    if (selectedSlots.length === 0) {
+      toast.error("최소 하나의 시간대를 선택해주세요.")
+      return
+    }
     if (!identityData?.candidateId) {
       toast.error("인증 정보가 없습니다. 다시 시도해주세요.")
       return
@@ -161,13 +174,13 @@ export default function VerticalMeetingCalendar({ experience, eventValid = false
 
     try {
       // 선택된 시간을 데이터베이스 형식으로 변환
-      const selections = selectedTimeSlots.map((slot, index) => ({
-        date: formatDateForDB(slot.date), // Date 객체를 문자열로 변환
-        startTime: slot.startTime,
-        endTime: slot.endTime
+      const selections = selectedSlots.map((slot) => ({
+        date: formatDateForDB(slot.date),
+        startTime: slot.start,
+        endTime: slot.end
       }))
 
-      console.log('Saving selections:', selections) // 디버그용 로그
+      console.log('Saving selections:', selections)
 
       // 데이터베이스에 저장
       const result = await saveCandidateTimeSelection(identityData.candidateId, selections)
@@ -182,146 +195,174 @@ export default function VerticalMeetingCalendar({ experience, eventValid = false
       console.error("Error submitting time selection:", error)
       toast.error("응답 저장 중 오류가 발생했습니다.")
     }
-
-    // Optionally reset the form or navigate to success state
-    // setState("success")
   }
 
-  const handleSlotSelect = (slotId: string, date: Date) => {
-    const dateKey = formatDateForDB(date)
-    const timeSlots = dateTimeSlots[dateKey] || []
-    const selectedTimeSlot = timeSlots.find((slot) => slot.id === slotId)
-
-    if (!selectedTimeSlot) return
-
-    setSelectedTimeSlots((prev) => {
-      const existingIndex = prev.findIndex((slot) => slot.slotId === slotId && isSameDay(slot.date, date))
-      if (existingIndex >= 0) {
-        return prev.filter((_, index) => index !== existingIndex)
-      } else {
-        // Use startTime and endTime from the time slot if available, otherwise parse from time string
-        let startTime = (selectedTimeSlot as any).startTime
-        let endTime = (selectedTimeSlot as any).endTime
-        
-        if (!startTime || !endTime) {
-          // Fallback: parse from time string
-          const timeParts = selectedTimeSlot.time.split(' - ')
-          startTime = timeParts[0]?.trim() || ''
-          endTime = timeParts[1]?.trim() || ''
+  // Helper function to get currently selected time slots
+  const getSelectedTimeSlots = () => {
+    const selected: Array<{ date: Date; start: string; end: string }> = []
+    availableTimes.forEach(timeEntry => {
+      timeEntry.slots.forEach(slot => {
+        if ((slot as any).selected) {
+          selected.push({
+            date: timeEntry.date,
+            start: slot.start,
+            end: slot.end
+          })
         }
-        
-        const newSlots = [...prev, { 
-          date, 
-          slotId, 
-          time: selectedTimeSlot.time,
-          startTime: startTime,
-          endTime: endTime
-        }]
-        
-        // 날짜와 시간 순으로 정렬
-        return newSlots.sort((a, b) => {
-          // 먼저 날짜로 정렬
-          const dateComparison = a.date.getTime() - b.date.getTime()
-          if (dateComparison !== 0) return dateComparison
-          
-          // 같은 날짜라면 시작 시간으로 정렬
-          return a.startTime.localeCompare(b.startTime)
-        })
-      }
+      })
+    })
+    return selected.sort((a, b) => {
+      const dateComparison = a.date.getTime() - b.date.getTime()
+      if (dateComparison !== 0) return dateComparison
+      return a.start.localeCompare(b.start)
     })
   }
 
-  const handleRemoveTimeSlot = (slotToRemove: SelectedTimeSlot) => {
-    setSelectedTimeSlots((prev) =>
-      prev.filter((slot) => !(slot.slotId === slotToRemove.slotId && isSameDay(slot.date, slotToRemove.date))),
+  // Format time ranges by merging consecutive slots
+  const formatTimeRanges = (slots: Array<{ start: string; end: string }>) => {
+    if (slots.length === 0) return ""
+
+    // Extract start times and sort them
+    const startTimes = slots.map(slot => slot.start).sort()
+
+    if (startTimes.length === 0) return ""
+
+    const ranges: string[] = []
+    let rangeStart = startTimes[0]
+    let currentEnd = slots.find(s => s.start === startTimes[0])?.end || startTimes[0]
+
+    // Find the end time for the current range by looking at consecutive slots
+    for (let i = 1; i < startTimes.length; i++) {
+      const currentStart = startTimes[i]
+      const nextEnd = slots.find(s => s.start === currentStart)?.end || currentStart
+      
+      if (currentEnd === currentStart) {
+        // Consecutive slot - extend current range
+        currentEnd = nextEnd
+      } else {
+        // Non-consecutive slot - save current range and start new one
+        ranges.push(`${rangeStart} - ${currentEnd}`)
+        rangeStart = currentStart
+        currentEnd = nextEnd
+      }
+    }
+    ranges.push(`${rangeStart} - ${currentEnd}`) // Add the last range
+
+    return ranges.join(", ")
+  }
+
+  // Check if a time slot is available for selection
+  const isTimeSlotAvailable = (dateIndex: number, timeIndex: number) => {
+    const date = availableTimes[dateIndex]?.date
+    if (!date) return false
+    
+    const timeSlot = timeSlots[timeIndex]
+    if (!timeSlot) return false
+    
+    // Check if this time slot is in the available slots for this date
+    return availableTimes[dateIndex].slots.some(slot => slot.start === timeSlot)
+  }
+
+  // Check if a time slot is selected
+  const isTimeSlotSelected = (dateIndex: number, timeIndex: number) => {
+    const date = availableTimes[dateIndex]?.date
+    if (!date) return false
+    
+    const timeSlot = timeSlots[timeIndex]
+    if (!timeSlot) return false
+    
+    const timeEntry = availableTimes[dateIndex]
+    const slot = timeEntry.slots.find(s => s.start === timeSlot)
+    return !!(slot as any)?.selected
+  }
+
+  // Handle drag selection
+  const handleSelectionComplete = (selection: { startDateIndex: number; endDateIndex: number; startTimeIndex: number; endTimeIndex: number }, mode: 'select' | 'deselect') => {
+    setAvailableTimes(prevTimes => {
+      const newTimes = [...prevTimes]
+      
+      for (let dateIndex = selection.startDateIndex; dateIndex <= selection.endDateIndex; dateIndex++) {
+        for (let timeIndex = selection.startTimeIndex; timeIndex <= selection.endTimeIndex; timeIndex++) {
+          // Only process if this slot is available
+          if (!isTimeSlotAvailable(dateIndex, timeIndex)) continue
+          
+          const timeSlot = timeSlots[timeIndex]
+          const slotIndex = newTimes[dateIndex].slots.findIndex(s => s.start === timeSlot)
+          
+          if (slotIndex >= 0) {
+            if (mode === 'deselect') {
+              // Remove selection
+              newTimes[dateIndex].slots[slotIndex] = {
+                ...newTimes[dateIndex].slots[slotIndex],
+                selected: false
+              } as any
+            } else {
+              // Add selection  
+              newTimes[dateIndex].slots[slotIndex] = {
+                ...newTimes[dateIndex].slots[slotIndex],
+                selected: true
+              } as any
+            }
+          }
+        }
+      }
+      
+      return newTimes
+    })
+  }
+
+  // Initialize drag selection hook
+  const dragSelection = useDragSelection({
+    availableTimes,
+    timeSlots,
+    onSelectionComplete: handleSelectionComplete,
+    isTimeSlotSelected,
+  })
+
+  const handleReset = () => {
+    setAvailableTimes(prevTimes => 
+      prevTimes.map(timeEntry => ({
+        ...timeEntry,
+        slots: timeEntry.slots.map(slot => ({ ...slot, selected: false } as any))
+      }))
     )
   }
 
-  const handleCalendarDateSelect = (date: Date) => {
-    setSelectedDates([date])
-    setActiveDate(date)
-    setSelectedSlot("")
-
-    const dateKey = formatDateForDB(date)
-    if (!dateTimeSlots[dateKey]) {
-      // Check if there are available time slots for this date
-      console.log('Looking for slots for dateKey:', dateKey)
-      console.log('Available time slots:', experience.availableTimeSlots)
-      const availableSlotsForDate = experience.availableTimeSlots?.filter((slot: any) => {
-        console.log('Comparing slot.date:', slot.date, 'with dateKey:', dateKey, 'match:', slot.date === dateKey)
-        return slot.date === dateKey
-      }) || []
-      console.log('Found slots for date:', availableSlotsForDate)
-
-      if (availableSlotsForDate.length > 0) {
-        // Convert available time slots to TimeSlot format
-        const timeSlots = availableSlotsForDate.map((slot: any, index: number) => ({
-          id: `${slot.date}-${slot.start_time}`, // Use same format as existing selections
-          time: `${slot.start_time} - ${slot.end_time}`,
-          startTime: slot.start_time,
-          endTime: slot.end_time
-        }))
-        
-        console.log('Converted time slots:', timeSlots)
-        console.log('Existing responses:', existingResponses)
-        
-        setDateTimeSlots((prevSlots) => {
-          const newSlots = {
-            ...prevSlots,
-            [dateKey]: timeSlots,
-          }
-          console.log('Updated dateTimeSlots:', newSlots)
-          return newSlots
-        })
-      } else {
-        // No available slots for this date
-        setDateTimeSlots((prevSlots) => ({
-          ...prevSlots,
-          [dateKey]: [],
-        }))
-      }
-    }
-
-    setState("time-selection")
-  }
-
-  const handleMonthNavigate = (direction: "prev" | "next") => {
-    setCurrentMonth((prev) => {
-      const newMonth = new Date(prev)
-      if (direction === "prev") {
-        newMonth.setMonth(prev.getMonth() - 1)
-      } else {
-        newMonth.setMonth(prev.getMonth() + 1)
-      }
-      return newMonth
-    })
-  }
-
-  const handleReset = () => {
-    setSelectedDates([])
-    setActiveDate(null)
-    setSelectedTimeSlots([])
-    setSelectedSlot("")
-    setErrorMessage("")
-    setDateTimeSlots({})
-    setState("date-selection")
-    setCurrentMonth(new Date())
-  }
-
   const handleEditResponse = () => {
+    // Load existing responses into the selection state
+    if (existingResponses.length > 0) {
+      // Group existing responses by date
+      const groupedSelections: { [key: string]: Array<{ start: string; end: string }> } = {}
+      existingResponses.forEach(response => {
+        const dateKey = formatDateForDB(response.date)
+        if (!groupedSelections[dateKey]) {
+          groupedSelections[dateKey] = []
+        }
+        groupedSelections[dateKey].push({
+          start: response.startTime,
+          end: response.endTime
+        })
+      })
+
+      // Update availableTimes to mark existing selections as selected
+      setAvailableTimes(prevTimes => 
+        prevTimes.map(timeEntry => {
+          const dateKey = formatDateForDB(timeEntry.date)
+          if (groupedSelections[dateKey]) {
+            const updatedSlots = timeEntry.slots.map(slot => {
+              const isSelected = groupedSelections[dateKey].some(selected => 
+                selected.start === slot.start && selected.end === slot.end
+              )
+              return { ...slot, selected: isSelected } as any
+            })
+            return { ...timeEntry, slots: updatedSlots }
+          }
+          return timeEntry
+        })
+      )
+    }
+    
     setShowExistingResponseDialog(false)
-    
-    // Keep existing selections visible in left panel
-    // selectedTimeSlots already contains existingResponses from initial login
-    
-    // Reset to initial state - same as normal mode
-    setSelectedDates([])
-    setActiveDate(null)
-    
-    // Keep existing responses data for when user clicks on dates
-    // existingResponses already contains the original selections
-    
-    setState("date-selection")
   }
 
   const handleKeepExistingResponse = () => {
@@ -375,245 +416,355 @@ export default function VerticalMeetingCalendar({ experience, eventValid = false
   }
 
   return (
-    <div className="w-full min-h-screen">
+    <div className="w-full min-h-screen bg-gray-50 overflow-y-auto">
       {/* Mobile Layout */}
-      <div className="lg:hidden flex flex-col p-4">
-        <div className="flex-shrink-0 pb-3">
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="text-lg font-medium">{experience.title}</h3>
+      <div className="lg:hidden flex flex-col min-h-screen">
+        {/* Mobile Header */}
+        <div className="bg-white border-b border-gray-200 px-4 py-3 sticky top-0 z-10">
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-lg font-semibold text-gray-900">{experience.title}</h1>
+              <p className="text-xs text-gray-600">{identityData?.name}</p>
+            </div>
             <div className="flex items-center gap-2">
-              <span className="text-sm text-gray-600">{identityData?.name}</span>
               <button onClick={handleLogout} className="text-xs text-gray-500 hover:text-gray-700 underline">
                 로그아웃
               </button>
-            </div>
-          </div>
-          <p className="text-sm text-gray-600">면접 일정을 선택해 주세요.</p>
-        </div>
-
-        <div className="space-y-4">
-          <CalendarGrid
-            currentMonth={currentMonth}
-            selectedDates={selectedDates}
-            onDateSelect={handleCalendarDateSelect}
-            onMonthNavigate={handleMonthNavigate}
-            availableDates={experience.availableTimeSlots?.map((slot: any) => 
-              slot.date
-            ) || []}
-          />
-
-          {selectedDates.length > 0 && (
-            <div className="space-y-2">
-              {selectedDates.map((date, index) => (
-                <div
-                  key={index}
-                  className={`flex items-center justify-between p-2 rounded-md cursor-pointer transition-colors ${
-                    activeDate && isSameDay(activeDate, date)
-                      ? "bg-blue-100 border-2 border-blue-300"
-                      : "bg-blue-50 hover:bg-blue-100"
-                  }`}
-                  onClick={() => setActiveDate(date)}
-                >
-                  <p className="text-sm font-medium text-gray-700">{formatDate(date)}</p>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {selectedDates.length > 0 && activeDate && (
-            <div className="space-y-4">
-              <h4 className="text-lg font-semibold text-gray-900">Choose times for {formatDate(activeDate)}</h4>
-
-              {selectedTimeSlots.length > 0 && (
-                <div className="space-y-3">
-                  <h5 className="font-medium text-gray-700">Selected Times</h5>
-                  {Object.entries(
-                    selectedTimeSlots.reduce(
-                      (groups, slot) => {
-                        const dateKey = formatDateForDB(slot.date)
-                        if (!groups[dateKey]) groups[dateKey] = []
-                        groups[dateKey].push(slot)
-                        return groups
-                      },
-                      {} as { [key: string]: SelectedTimeSlot[] },
-                    ),
-                  ).map(([dateKey, slots]) => (
-                    <div key={dateKey} className="p-3 bg-green-50 rounded-lg border border-green-200">
-                      <div className="mb-2">
-                        <p className="text-green-800 text-sm font-semibold">{formatDate(slots[0].date)}</p>
-                      </div>
-                      <div className="space-y-2">
-                        {slots.map((slot, index) => (
-                          <div key={index} className="flex items-center justify-between">
-                            <p className="text-green-700 text-sm">{slot.time}</p>
-                            <button
-                              onClick={() => handleRemoveTimeSlot(slot)}
-                              className="p-1 hover:bg-green-100 rounded-md transition-colors"
-                            >
-                              <X className="w-3 h-3 text-green-600" />
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {state === "time-selection" && (
-                <div className="p-4 bg-white border border-gray-200 rounded-lg">
-                  <TimeSlotList
-                    timeSlots={dateTimeSlots[formatDateForDB(activeDate)] || []}
-                    selectedSlots={(() => {
-                      const activeDateSelections = selectedTimeSlots
-                        .filter((slot) => isSameDay(slot.date, activeDate))
-                        .map((slot) => slot.slotId)
-                      console.log('Active date:', activeDate, 'selectedTimeSlots:', selectedTimeSlots, 'activeDateSelections:', activeDateSelections)
-                      return activeDateSelections
-                    })()}
-                    onSlotSelect={(slotId) => handleSlotSelect(slotId, activeDate)}
-                  />
-                </div>
-              )}
-
               <button
                 onClick={handleSubmit}
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-4 rounded-lg transition-colors"
+                disabled={getSelectedTimeSlots().length === 0}
+                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white text-xs font-medium rounded transition-colors"
               >
-                Submit Selected Times ({selectedTimeSlots.length})
+                완료
               </button>
             </div>
+          </div>
+        </div>
+
+        {/* Mobile Content */}
+        <div className="flex-1 bg-gray-50 p-4 space-y-4">
+          {/* Interview Info Card */}
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+            <h3 className="text-sm font-semibold text-gray-900 mb-3">면접 정보</h3>
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 bg-blue-500 rounded-full"></span>
+                <span className="text-xs text-gray-700">면접 길이: {experience.interviewLength}분</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 bg-green-500 rounded-full"></span>
+                <span className="text-xs text-gray-700">마감일: {new Date(experience.deadline).toLocaleString('ko-KR', { 
+                  month: 'short', 
+                  day: 'numeric',
+                  hour: '2-digit',
+                  minute: '2-digit'
+                })}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 bg-purple-500 rounded-full"></span>
+                <span className="text-xs text-gray-700">담당자: {experience.organizerEmail}</span>
+              </div>
+              {experience.description && (
+                <div className="mt-3">
+                  <p className="text-xs text-gray-600 bg-blue-50 px-2 py-2 rounded">
+                    {experience.description}
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Selected Times Card */}
+          {getSelectedTimeSlots().length > 0 && (
+            <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+              <h3 className="text-sm font-semibold text-gray-900 mb-3">선택된 시간</h3>
+              <div className="space-y-2">
+                {Object.entries(
+                  getSelectedTimeSlots().reduce(
+                    (groups, slot) => {
+                      const dateKey = formatDateForDB(slot.date)
+                      if (!groups[dateKey]) groups[dateKey] = []
+                      groups[dateKey].push(slot)
+                      return groups
+                    },
+                    {} as { [key: string]: Array<{ date: Date; start: string; end: string }> },
+                  ),
+                ).map(([dateKey, slots]) => (
+                  <div key={dateKey} className="p-2 bg-green-50 rounded border border-green-200">
+                    <div className="mb-1">
+                      <p className="text-green-800 text-xs font-semibold">{formatDate(slots[0].date)}</p>
+                    </div>
+                    <div>
+                      <p className="text-green-700 text-xs">{formatTimeRanges(slots)}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
           )}
+
+          {/* Time Selection Grid */}
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+            <h3 className="text-sm font-semibold text-gray-900 mb-3">시간대 선택</h3>
+            <p className="text-xs text-gray-600 mb-3">드래그하여 원하는 시간대를 선택해 주세요.</p>
+            
+            {availableTimes.length === 0 ? (
+              <div className="flex items-center justify-center py-8 text-gray-500">
+                <p className="text-sm">사용 가능한 시간대가 없습니다.</p>
+              </div>
+            ) : (
+              <div className="border border-gray-200 rounded overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="table-fixed min-w-max">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-0 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider w-12"></th>
+                        {availableTimes.map((timeEntry, dateIndex) => (
+                          <th
+                            key={dateIndex}
+                            className="px-1 py-2 text-center text-[10px] font-medium text-gray-500 uppercase tracking-wider w-12 whitespace-nowrap"
+                          >
+                            {timeEntry.date.toLocaleDateString("ko-KR", {
+                              month: "short",
+                              day: "numeric",
+                            })}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white">
+                      {timeSlots.map((timeSlot, timeIndex) => (
+                        <tr key={timeSlot}>
+                          <td className="px-0 py-0 text-[8px] text-gray-600 font-mono border-r border-gray-200 w-12 bg-gray-50 text-center relative z-10">
+                            <div className="relative -top-1">{timeSlot}</div>
+                          </td>
+                          {availableTimes.map((timeEntry, dateIndex) => {
+                            const isAvailable = isTimeSlotAvailable(dateIndex, timeIndex)
+                            const cellState = dragSelection.getCellState(dateIndex, timeIndex)
+                            
+                            let cellClassName = "h-5 cursor-pointer select-none border-b border-gray-200 "
+                            
+                            if (!isAvailable) {
+                              cellClassName += "bg-gray-100 cursor-not-allowed"
+                            } else {
+                              switch (cellState) {
+                                case 'selected':
+                                  cellClassName += "bg-blue-500"
+                                  break
+                                case 'will-select':
+                                  cellClassName += "bg-blue-200"
+                                  break
+                                case 'will-deselect':
+                                  cellClassName += "bg-white"
+                                  break
+                                default:
+                                  cellClassName += "bg-white hover:bg-gray-100"
+                              }
+                            }
+
+                            return (
+                              <td key={dateIndex} className="px-0 py-0 border-r border-gray-200 w-12">
+                                <div
+                                  className={cellClassName}
+                                  data-slot-id={`${dateIndex}-${timeIndex}`}
+                                  onMouseDown={isAvailable ? () => dragSelection.handleTimeSlotMouseDown(dateIndex, timeIndex) : undefined}
+                                  onMouseEnter={isAvailable ? () => dragSelection.handleTimeSlotMouseEnter(dateIndex, timeIndex) : undefined}
+                                  onTouchStart={isAvailable ? (e) => {
+                                    e.preventDefault()
+                                    dragSelection.handleTimeSlotMouseDown(dateIndex, timeIndex)
+                                  } : undefined}
+                                  onTouchMove={isAvailable ? (e) => {
+                                    e.preventDefault()
+                                    const touch = e.touches[0]
+                                    const element = document.elementFromPoint(touch.clientX, touch.clientY)
+                                    const slotId = element?.getAttribute('data-slot-id')
+                                    if (slotId) {
+                                      const [touchDateIndex, touchTimeIndex] = slotId.split('-').map(Number)
+                                      dragSelection.handleTimeSlotMouseEnter(touchDateIndex, touchTimeIndex)
+                                    }
+                                  } : undefined}
+                                />
+                              </td>
+                            )
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
       {/* Desktop Layout */}
-      <div className="hidden lg:grid lg:grid-cols-12 lg:gap-8 min-h-screen w-full">
-        {/* Left Column */}
-        <div className="lg:col-span-3 flex flex-col p-6 bg-gray-50 border-r border-gray-200">
-          <div className="flex items-center justify-between mb-6">
-            <h3 className="text-xl font-semibold text-gray-900">{experience.title}</h3>
-            <div className="flex flex-col items-end gap-1">
-              <span className="text-sm font-medium text-gray-700">{identityData?.name}</span>
-              <button onClick={handleLogout} className="text-xs text-gray-500 hover:text-gray-700 underline">
-                로그아웃
+      <div className="hidden lg:block">
+        <div className="max-w-7xl mx-auto p-6">
+          {/* Header */}
+          <div className="flex items-center justify-between mb-8">
+            <div>
+              <h1 className="text-3xl font-bold text-gray-900">{experience.title}</h1>
+              <p className="text-gray-600 mt-2">드래그하여 원하는 시간대를 선택해 주세요.</p>
+            </div>
+            <div className="flex items-center gap-6">
+              <div className="text-right">
+                <p className="text-sm font-medium text-gray-700">{identityData?.name}</p>
+                <button onClick={handleLogout} className="text-xs text-gray-500 hover:text-gray-700 underline">
+                  로그아웃
+                </button>
+              </div>
+              <button
+                onClick={handleSubmit}
+                disabled={getSelectedTimeSlots().length === 0}
+                className="px-6 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-300 text-white font-medium rounded-lg transition-colors"
+              >
+                선택 완료
               </button>
             </div>
           </div>
 
-          <div className="space-y-6 mb-8">
-            <p className="text-gray-600">면접 일정을 선택해 주세요.</p>
-            <div className="space-y-3">
-              <div className="flex items-center gap-3 text-gray-600">
-                <span className="w-3 h-3 bg-blue-500 rounded-full"></span>
-                <span>{experience.interviewLength}분</span>
-              </div>
-              <div className="flex items-center gap-3 text-gray-600">
-                <span className="w-3 h-3 bg-green-500 rounded-full"></span>
-                <span>Video call</span>
-              </div>
-            </div>
-          </div>
-
-          {selectedTimeSlots.length > 0 && (
-            <div className="space-y-4">
-              <h4 className="font-semibold text-gray-900">Selected Times</h4>
-              {Object.entries(
-                selectedTimeSlots.reduce(
-                  (groups, slot) => {
-                    const dateKey = slot.date.toISOString().split("T")[0]
-                    if (!groups[dateKey]) groups[dateKey] = []
-                    groups[dateKey].push(slot)
-                    return groups
-                  },
-                  {} as { [key: string]: SelectedTimeSlot[] },
-                ),
-              ).map(([dateKey, slots]) => (
-                <div key={dateKey} className="p-3 bg-green-50 rounded-lg border border-green-200">
-                  <div className="mb-2">
-                    <p className="text-green-800 text-sm font-semibold">{formatDate(slots[0].date)}</p>
+          <div className="grid grid-cols-12 gap-6 min-h-[800px]">
+            {/* Left Card - Interview Info & Selected Times */}
+            <div className="col-span-4 bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-6">면접 정보</h3>
+              
+              {/* Interview Details */}
+              <div className="space-y-4 mb-8">
+                <div className="flex items-center gap-3">
+                  <span className="w-3 h-3 bg-blue-500 rounded-full"></span>
+                  <span className="text-sm text-gray-700">면접 길이: {experience.interviewLength}분</span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="w-3 h-3 bg-green-500 rounded-full"></span>
+                  <span className="text-sm text-gray-700">마감일: {new Date(experience.deadline).toLocaleString('ko-KR', { 
+                    month: 'long', 
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                  })}</span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="w-3 h-3 bg-purple-500 rounded-full"></span>
+                  <span className="text-sm text-gray-700">담당자: {experience.organizerEmail}</span>
+                </div>
+                {experience.description && (
+                  <div className="mt-4">
+                    <p className="text-sm text-gray-600 bg-blue-50 px-3 py-2 rounded-md">
+                      {experience.description}
+                    </p>
                   </div>
-                  <div className="space-y-2">
-                    {slots.map((slot, index) => (
-                      <div key={index} className="flex items-center justify-between">
-                        <p className="text-green-700 text-sm">{slot.time}</p>
-                        <button
-                          onClick={() => handleRemoveTimeSlot(slot)}
-                          className="p-1 hover:bg-green-100 rounded-md transition-colors"
-                        >
-                          <X className="w-3 h-3 text-green-600" />
-                        </button>
+                )}
+              </div>
+
+              {/* Selected Times */}
+              {getSelectedTimeSlots().length > 0 && (
+                <div className="border-t pt-6">
+                  <h4 className="font-semibold text-gray-900 mb-4">선택된 시간</h4>
+                  <div className="space-y-3">
+                    {Object.entries(
+                      getSelectedTimeSlots().reduce(
+                        (groups, slot) => {
+                          const dateKey = formatDateForDB(slot.date)
+                          if (!groups[dateKey]) groups[dateKey] = []
+                          groups[dateKey].push(slot)
+                          return groups
+                        },
+                        {} as { [key: string]: Array<{ date: Date; start: string; end: string }> },
+                      ),
+                    ).map(([dateKey, slots]) => (
+                      <div key={dateKey} className="p-3 bg-green-50 rounded-lg border border-green-200">
+                        <div className="mb-2">
+                          <p className="text-green-800 text-sm font-semibold">{formatDate(slots[0].date)}</p>
+                        </div>
+                        <div>
+                          <p className="text-green-700 text-sm">{formatTimeRanges(slots)}</p>
+                        </div>
                       </div>
                     ))}
                   </div>
                 </div>
-              ))}
+              )}
             </div>
-          )}
-        </div>
 
-        {/* Center Column */}
-        <div className="lg:col-span-5 flex flex-col p-6">
-          <h3 className="text-2xl font-semibold text-gray-900 mb-8">Choose dates</h3>
-          <div className="flex-1 flex items-center justify-center">
-            <CalendarGrid
-              currentMonth={currentMonth}
-              selectedDates={selectedDates}
-              onDateSelect={handleCalendarDateSelect}
-              onMonthNavigate={handleMonthNavigate}
-              availableDates={experience.availableTimeSlots?.map((slot: any) => 
-                slot.date
-              ) || []}
-            />
+            {/* Right Card - Time Selection Grid */}
+            <div className="col-span-8 bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-6">시간대 선택</h3>
+              
+              {availableTimes.length === 0 ? (
+                <div className="flex items-center justify-center py-20 text-gray-500">
+                  <p>사용 가능한 시간대가 없습니다.</p>
+                </div>
+              ) : (
+                <div className="border border-gray-200 rounded-lg overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="table-fixed min-w-max">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="px-0 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-16"></th>
+                          {availableTimes.map((timeEntry, dateIndex) => (
+                            <th
+                              key={dateIndex}
+                              className="px-1 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider w-16 whitespace-nowrap"
+                            >
+                              {timeEntry.date.toLocaleDateString("ko-KR", {
+                                month: "short",
+                                day: "numeric",
+                              })}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="bg-white">
+                        {timeSlots.map((timeSlot, timeIndex) => (
+                          <tr key={timeSlot}>
+                            <td className="px-0 py-0 text-[10px] text-gray-600 font-mono border-r border-gray-200 w-16 bg-gray-50 text-center relative z-10">
+                              <div className="relative -top-2">{timeSlot}</div>
+                            </td>
+                            {availableTimes.map((timeEntry, dateIndex) => {
+                              const isAvailable = isTimeSlotAvailable(dateIndex, timeIndex)
+                              const cellState = dragSelection.getCellState(dateIndex, timeIndex)
+                              
+                              let cellClassName = "h-6 cursor-pointer select-none border-b border-gray-200 "
+                              
+                              if (!isAvailable) {
+                                cellClassName += "bg-gray-100 cursor-not-allowed"
+                              } else {
+                                switch (cellState) {
+                                  case 'selected':
+                                    cellClassName += "bg-blue-500"
+                                    break
+                                  case 'will-select':
+                                    cellClassName += "bg-blue-200"
+                                    break
+                                  case 'will-deselect':
+                                    cellClassName += "bg-white"
+                                    break
+                                  default:
+                                    cellClassName += "bg-white hover:bg-gray-100"
+                                }
+                              }
+
+                              return (
+                                <td key={dateIndex} className="px-0 py-0 border-r border-gray-200 w-16">
+                                  <div
+                                    className={cellClassName}
+                                    data-slot-id={`${dateIndex}-${timeIndex}`}
+                                    onMouseDown={isAvailable ? () => dragSelection.handleTimeSlotMouseDown(dateIndex, timeIndex) : undefined}
+                                    onMouseEnter={isAvailable ? () => dragSelection.handleTimeSlotMouseEnter(dateIndex, timeIndex) : undefined}
+                                  />
+                                </td>
+                              )
+                            })}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
-        </div>
-
-        {/* Right Column */}
-        <div className="lg:col-span-4 flex flex-col p-6 bg-gray-50 border-l border-gray-200">
-          {selectedDates.length === 0 && (
-            <div className="flex items-center justify-center h-full text-gray-500">
-              <p className="text-center">날짜를 선택해주세요</p>
-            </div>
-          )}
-
-          {selectedDates.length > 0 && !activeDate && (
-            <div className="flex items-center justify-center h-full text-gray-500">
-              <p className="text-center">시간을 선택할 날짜를 클릭해주세요</p>
-            </div>
-          )}
-
-          {state === "loading" && (
-            <div className="flex items-center justify-center h-full">
-              <LoadingSpinner />
-            </div>
-          )}
-
-          {state === "time-selection" && activeDate && (
-            <div className="space-y-6">
-              <h4 className="text-lg font-semibold text-gray-900">Choose times for {formatDate(activeDate)}</h4>
-              <div className="p-4 bg-white border border-gray-200 rounded-lg">
-                <TimeSlotList
-                  timeSlots={(() => {
-                    const activeDateKey = formatDateForDB(activeDate)
-                    const slots = dateTimeSlots[activeDateKey] || []
-                    console.log('Rendering TimeSlotList with activeDateKey:', activeDateKey, 'slots:', slots, 'dateTimeSlots:', dateTimeSlots)
-                    return slots
-                  })()}
-                  selectedSlots={selectedTimeSlots
-                    .filter((slot) => isSameDay(slot.date, activeDate))
-                    .map((slot) => slot.slotId)}
-                  onSlotSelect={(slotId) => handleSlotSelect(slotId, activeDate)}
-                />
-              </div>
-
-              <button
-                onClick={handleSubmit}
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-4 rounded-lg transition-colors"
-              >
-                Submit Selected Times ({selectedTimeSlots.length})
-              </button>
-            </div>
-          )}
         </div>
       </div>
 
@@ -626,7 +777,6 @@ export default function VerticalMeetingCalendar({ experience, eventValid = false
         responses={existingResponses}
       />
 
-
       {/* Success/Error States */}
       <AnimatePresence>
         {(state === "error" || state === "success") && (
@@ -634,14 +784,20 @@ export default function VerticalMeetingCalendar({ experience, eventValid = false
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.9 }}
-            className="fixed inset-0 bg-white z-50 flex items-center justify-center"
+            className="fixed inset-0 bg-white z-50 overflow-y-auto flex items-center justify-center"
           >
             {state === "error" && <ErrorState message={errorMessage} onRetry={handleReset} />}
             {state === "success" && (
               <SuccessState
-                selectedTimeSlots={selectedTimeSlots}
+                selectedTimeSlots={getSelectedTimeSlots().map(slot => ({
+                  date: slot.date,
+                  slotId: `${formatDateForDB(slot.date)}-${slot.start}`,
+                  time: `${slot.start} - ${slot.end}`,
+                  startTime: slot.start,
+                  endTime: slot.end
+                }))}
                 onScheduleAnother={handleReset}
-                onEdit={handleEditResponse}
+                onEdit={() => setState("time-selection")}
               />
             )}
           </motion.div>

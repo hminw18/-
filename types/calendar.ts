@@ -1,11 +1,13 @@
 export interface Experience {
   title: string
+  description?: string
   interviewLength?: number
   availableTimeSlots?: any[]
   dates: { id: string; label: string; date: string; dateRange: string }[]
   status?: string
   deadline?: string
   organizerEmail?: string
+  timeRange?: { startTime: string; endTime: string }
 }
 
 export interface TimeSlot {

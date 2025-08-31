@@ -5,6 +5,17 @@ const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
+// 서비스 역할 키를 사용하는 관리자 클라이언트 (서버 사이드 전용)
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+export const supabaseAdmin = supabaseServiceKey 
+  ? createClient(supabaseUrl, supabaseServiceKey, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false
+      }
+    })
+  : null
+
 // Database types (will be updated when schema is created)
 export type Database = {
   public: {
@@ -15,6 +26,7 @@ export type Database = {
           event_name: string
           organizer_email: string
           interview_length: number
+          buffer_time: number
           simultaneous_count: number
           deadline: string
           reminder_settings: Record<string, any>
@@ -30,6 +42,7 @@ export type Database = {
           event_name: string
           organizer_email: string
           interview_length: number
+          buffer_time?: number
           simultaneous_count?: number
           deadline: string
           reminder_settings?: Record<string, any>
@@ -45,6 +58,7 @@ export type Database = {
           event_name?: string
           organizer_email?: string
           interview_length?: number
+          buffer_time?: number
           simultaneous_count?: number
           deadline?: string
           reminder_settings?: Record<string, any>

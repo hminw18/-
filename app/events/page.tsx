@@ -1,12 +1,14 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { Calendar, Clock, Users, ChevronRight, Plus, RefreshCw } from "lucide-react"
+import { Calendar, Clock, Users, ChevronRight, Plus, RefreshCw, Trash2 } from "lucide-react"
+import toast from 'react-hot-toast'
 import Link from "next/link"
 import { supabase } from "../../lib/supabase"
 import ProtectedRoute from "../../components/auth/ProtectedRoute"
 import { useAuth } from "../../contexts/AuthContext"
 import AppHeader from "../../components/ui/app-header"
+import ConfirmationDialog from "../../components/ui/confirmation-dialog"
 
 interface InterviewEvent {
   id: string
@@ -111,6 +113,9 @@ export default function EventsPage() {
   const [events, setEvents] = useState<InterviewEvent[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [deletingEventId, setDeletingEventId] = useState<string | null>(null)
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false)
+  const [eventToDelete, setEventToDelete] = useState<string | null>(null)
 
   const loadEvents = async () => {
     if (!user) return
@@ -134,13 +139,51 @@ export default function EventsPage() {
     }
   }, [user])
 
+  const handleDeleteEvent = async () => {
+    if (!eventToDelete) return
+
+    setDeletingEventId(eventToDelete)
+    try {
+      const { error } = await supabase
+        .from('interview_events')
+        .delete()
+        .eq('id', eventToDelete)
+        .eq('user_id', user?.id)
+
+      if (error) throw error
+
+      toast.success('이벤트가 삭제되었습니다.')
+      setEvents(prev => prev.filter(event => event.id !== eventToDelete))
+    } catch (error) {
+      console.error('Error deleting event:', error)
+      toast.error('이벤트 삭제 중 오류가 발생했습니다.')
+    } finally {
+      setDeletingEventId(null)
+      setShowDeleteDialog(false)
+      setEventToDelete(null)
+    }
+  }
+
+  const openDeleteDialog = (eventId: string) => {
+    setEventToDelete(eventId)
+    setShowDeleteDialog(true)
+  }
+
   return (
     <ProtectedRoute>
       <div className="min-h-screen bg-gray-50">
       {/* Header */}
       <AppHeader>
-        <div className="flex items-center justify-between w-full">
-            <h1 className="text-xl font-semibold text-gray-900">면접 이벤트 관리</h1>
+        <div className="flex items-center w-full">
+          <h1 className="text-xl font-semibold text-gray-900">면접 이벤트 관리</h1>
+        </div>
+      </AppHeader>
+
+      {/* Main Content */}
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="mb-6">
+          <div className="flex items-center justify-between">
+            <h2 className="text-2xl font-semibold text-gray-900">전체 이벤트</h2>
             <div className="flex items-center gap-3">
               <button
                 onClick={loadEvents}
@@ -148,22 +191,18 @@ export default function EventsPage() {
                 className="inline-flex items-center gap-2 px-3 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
               >
                 <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-                새로고침
+                <span className="hidden sm:inline">새로고침</span>
               </button>
               <Link
                 href="/create"
                 className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
               >
-                <Plus className="w-4 h-4" />새 이벤트 생성
+                <Plus className="w-4 h-4" />
+                <span className="hidden sm:inline">새 이벤트 생성</span>
+                <span className="sm:hidden">생성</span>
               </Link>
             </div>
-        </div>
-      </AppHeader>
-
-      {/* Main Content */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="mb-6">
-          <h2 className="text-2xl font-semibold text-gray-900 mb-2">전체 이벤트</h2>
+          </div>
           <p className="text-gray-600">생성된 모든 면접 이벤트를 관리하세요.</p>
         </div>
 
@@ -199,65 +238,100 @@ export default function EventsPage() {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {events.map((event) => (
-              <Link
+              <div
                 key={event.id}
-                href={`/events/${event.id}/dashboard`}
-                className="bg-white border border-gray-200 rounded-lg p-6 hover:shadow-lg transition-shadow cursor-pointer group"
+                className="bg-white border border-gray-200 rounded-lg p-6 hover:shadow-lg transition-shadow group relative"
               >
-                <div className="flex items-start justify-between mb-4">
-                  <div className="flex-1">
-                    <h3 className="text-lg font-semibold text-gray-900 group-hover:text-blue-600 transition-colors">
-                      {event.eventName}
-                    </h3>
-                    <p className="text-sm text-gray-600 mt-1">
-                      {event.createdAt.toLocaleDateString("ko-KR", {
-                        year: "numeric",
-                        month: "long",
-                        day: "numeric",
-                      })}
-                    </p>
-                  </div>
-                  <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-blue-600 transition-colors" />
-                </div>
+                {/* Delete Button */}
+                <button
+                  onClick={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    openDeleteDialog(event.id)
+                  }}
+                  disabled={deletingEventId === event.id}
+                  className="absolute top-4 right-4 p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors disabled:opacity-50 z-10"
+                  title="이벤트 삭제"
+                >
+                  {deletingEventId === event.id ? (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="w-4 h-4" />
+                  )}
+                </button>
 
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span
-                      className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(event.status)}`}
-                    >
-                      {getStatusText(event.status)}
-                    </span>
+                {/* Card Content - Clickable */}
+                <Link href={`/events/${event.id}/dashboard`} className="block pr-10">
+                  <div className="flex items-start justify-between mb-4">
+                    <div className="flex-1">
+                      <h3 className="text-lg font-semibold text-gray-900 group-hover:text-blue-600 transition-colors">
+                        {event.eventName}
+                      </h3>
+                      <p className="text-sm text-gray-600 mt-1">
+                        {event.createdAt.toLocaleDateString("ko-KR", {
+                          year: "numeric",
+                          month: "long",
+                          day: "numeric",
+                        })}
+                      </p>
+                    </div>
+                    <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-blue-600 transition-colors" />
                   </div>
 
-                  <div className="flex items-center gap-4 text-sm text-gray-600">
-                    <div className="flex items-center gap-1">
-                      <Users className="w-4 h-4" />
-                      <span>
-                        {event.respondedCandidates}/{event.totalCandidates}
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span
+                        className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(event.status)}`}
+                      >
+                        {getStatusText(event.status)}
                       </span>
                     </div>
-                    <div className="flex items-center gap-1">
-                      <Clock className="w-4 h-4" />
-                      <span>{event.interviewLength}분</span>
-                    </div>
-                  </div>
 
-                  <div className="w-full bg-gray-200 rounded-full h-2">
-                    <div
-                      className="bg-blue-600 h-2 rounded-full transition-all"
-                      style={{
-                        width: `${(event.respondedCandidates / event.totalCandidates) * 100}%`,
-                      }}
-                    />
+                    <div className="flex items-center gap-4 text-sm text-gray-600">
+                      <div className="flex items-center gap-1">
+                        <Users className="w-4 h-4" />
+                        <span>
+                          {event.respondedCandidates}/{event.totalCandidates}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <Clock className="w-4 h-4" />
+                        <span>{event.interviewLength}분</span>
+                      </div>
+                    </div>
+
+                    <div className="w-full bg-gray-200 rounded-full h-2">
+                      <div
+                        className="bg-blue-600 h-2 rounded-full transition-all"
+                        style={{
+                          width: `${(event.respondedCandidates / event.totalCandidates) * 100}%`,
+                        }}
+                      />
+                    </div>
+                    <p className="text-xs text-gray-500">
+                      응답률: {Math.round((event.respondedCandidates / event.totalCandidates) * 100)}%
+                    </p>
                   </div>
-                  <p className="text-xs text-gray-500">
-                    응답률: {Math.round((event.respondedCandidates / event.totalCandidates) * 100)}%
-                  </p>
-                </div>
-              </Link>
+                </Link>
+              </div>
             ))}
           </div>
         )}
+
+        {/* Delete Confirmation Dialog */}
+        <ConfirmationDialog
+          isOpen={showDeleteDialog}
+          onClose={() => {
+            setShowDeleteDialog(false)
+            setEventToDelete(null)
+          }}
+          onConfirm={handleDeleteEvent}
+          title="이벤트 삭제"
+          message="이벤트를 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다."
+          confirmText="삭제하기"
+          cancelText="취소"
+          destructive
+        />
       </div>
     </div>
     </ProtectedRoute>

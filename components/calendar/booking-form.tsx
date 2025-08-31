@@ -30,34 +30,34 @@ export default function BookingForm({ selectedDate, selectedSlot, timeSlots, onS
         <div className="space-y-3 flex-shrink-0">
           <div>
             <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-1">
-              Full Name *
+              이름 *
             </label>
             <input
               type="text"
               id="name"
-              {...register("name", { required: "Name is required" })}
+              {...register("name", { required: "이름을 입력해주세요" })}
               className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-colors"
-              placeholder="Enter your full name"
+              placeholder="성함을 입력해주세요"
             />
             {errors.name && <p className="text-red-500 text-xs mt-1">{errors.name.message}</p>}
           </div>
 
           <div>
             <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
-              Email Address *
+              이메일 주소 *
             </label>
             <input
               type="email"
               id="email"
               {...register("email", {
-                required: "Email is required",
+                required: "이메일을 입력해주세요",
                 pattern: {
                   value: /^\S+@\S+$/i,
-                  message: "Invalid email address",
+                  message: "올바른 이메일 주소를 입력해주세요",
                 },
               })}
               className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-primary focus:border-transparent outline-none transition-colors"
-              placeholder="Enter your email"
+              placeholder="이메일을 입력해주세요"
             />
             {errors.email && <p className="text-red-500 text-xs mt-1">{errors.email.message}</p>}
           </div>
@@ -74,7 +74,7 @@ export default function BookingForm({ selectedDate, selectedSlot, timeSlots, onS
               : "bg-primary hover:bg-primary-hover text-white"
           }`}
         >
-          Schedule Meeting
+          일정 예약하기
         </motion.button>
       </form>
     </div>

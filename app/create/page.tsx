@@ -5,7 +5,7 @@ import type React from "react"
 import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { motion, AnimatePresence } from "framer-motion"
-import { ChevronRight, Upload, X, Plus, Calendar, Users, Mail } from "lucide-react"
+import { ChevronRight, Upload, X, Plus, Calendar, Users, Mail, Clock, Eye } from "lucide-react"
 import toast from 'react-hot-toast'
 import CalendarGrid from "../../components/calendar/calendar-grid"
 import useDragSelection from "../../hooks/useDragSelection"
@@ -13,11 +13,18 @@ import { createInterviewEvent } from "../../lib/database"
 import ProtectedRoute from "../../components/auth/ProtectedRoute"
 import { useAuth } from "../../contexts/AuthContext"
 import AppHeader from "../../components/ui/app-header"
+import { formatDate } from "../../utils/calendar"
+import { getUserPlan, canCreateInterview, canAddCandidates, getPlanLimitMessage, canSendEmail, getUserEmailSettings } from "../../utils/plan"
+import { sendInterviewInviteEmails, validateEmailList } from "../../utils/email"
+import EmailPreviewModal, { CustomEmailTemplate } from "../../components/email/EmailPreviewModal"
 
 interface BasicInfo {
   eventName: string
+  description: string
   interviewLength: string | number
+  bufferTime: string | number
   simultaneousCount: string | number
+  organizerName: string
   organizerEmail: string
 }
 
@@ -59,20 +66,25 @@ export default function CreateInterviewPage() {
   const [currentStep, setCurrentStep] = useState<Step>("basic-info")
   const [basicInfo, setBasicInfo] = useState<BasicInfo>({
     eventName: "",
+    description: "",
     interviewLength: 30,
+    bufferTime: 10,
     simultaneousCount: 1,
+    organizerName: "",
     organizerEmail: "",
   })
   const [touched, setTouched] = useState({
     eventName: false,
+    description: false,
     interviewLength: false,
     simultaneousCount: false,
+    organizerName: false,
     organizerEmail: false,
   })
   const [availableTimes, setAvailableTimes] = useState<AvailableTime[]>([])
   const [selectedDate, setSelectedDate] = useState<Date | null>(null)
   const [candidates, setCandidates] = useState<Candidate[]>([])
-  const [currentMonth, setCurrentMonth] = useState(new Date())
+  const [currentMonth, setCurrentMonth] = useState<Date | null>(null)
   const [timeRange, setTimeRange] = useState<TimeRange>({
     startTime: "09:00",
     endTime: "18:00",
@@ -122,7 +134,7 @@ export default function CreateInterviewPage() {
   }
 
   const [reviewSettings, setReviewSettings] = useState<ReviewSettings>({
-    deadline: getDefaultDeadline(),
+    deadline: '', // 클라이언트에서 설정
     reminderOptions: {
       oneDayBefore: true,
       threeHoursBefore: true,
@@ -136,6 +148,20 @@ export default function CreateInterviewPage() {
   })
 
   const [isCreating, setIsCreating] = useState(false)
+  const [userPlan] = useState(() => getUserPlan())
+  const [minDateTime, setMinDateTime] = useState('')
+  const [showEmailPreview, setShowEmailPreview] = useState(false)
+  const [customEmailTemplate, setCustomEmailTemplate] = useState<CustomEmailTemplate | null>(null)
+
+  // 클라이언트에서만 초기값 설정 (hydration 오류 방지)
+  useEffect(() => {
+    setCurrentMonth(new Date())
+    setMinDateTime(new Date().toISOString().slice(0, 16))
+    setReviewSettings(prev => ({
+      ...prev,
+      deadline: getDefaultDeadline()
+    }))
+  }, [])
 
   // 사용자 로그인 정보로 기본값 설정
   useEffect(() => {
@@ -154,6 +180,32 @@ export default function CreateInterviewPage() {
       deadline: getDefaultDeadline(availableTimes)
     }))
   }, [availableTimes])
+
+  // 페이지 새로고침/종료 경고
+  useEffect(() => {
+    // 데이터가 입력되었는지 확인하는 함수
+    const hasData = () => {
+      return basicInfo.eventName.trim() || 
+             basicInfo.description.trim() ||
+             basicInfo.organizerEmail.trim() ||
+             candidates.length > 0 ||
+             availableTimes.length > 0
+    }
+
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (hasData()) {
+        e.preventDefault()
+        e.returnValue = ''
+        return ''
+      }
+    }
+
+    window.addEventListener('beforeunload', handleBeforeUnload)
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload)
+    }
+  }, [basicInfo, candidates, availableTimes])
 
   // 지원자 정보 검증 함수
   const validateCandidates = (): boolean => {
@@ -199,6 +251,13 @@ export default function CreateInterviewPage() {
       return false
     }
     
+    // 수용 인원 초과 검사
+    const maxCapacity = getMaxCapacity()
+    if (candidates.length > maxCapacity) {
+      toast.error(`지원자 수(${candidates.length}명)가 최대 수용 인원(${maxCapacity}명)을 초과합니다.`)
+      return false
+    }
+    
     return true
   }
 
@@ -228,15 +287,36 @@ export default function CreateInterviewPage() {
     const deadlineDate = new Date(reviewSettings.deadline)
     const now = new Date()
     
-    if (deadlineDate <= now) {
+    // 현재 시점과 정확한 시간 비교 (밀리초 단위)
+    if (deadlineDate.getTime() <= now.getTime()) {
       toast.error("마감일시는 현재 시점보다 미래여야 합니다.")
       return false
     }
     
-    // 가장 빠른 면접 날짜 확인
-    const earliestInterviewDate = Math.min(...availableTimes.map(time => time.date.getTime()))
-    if (deadlineDate.getTime() >= earliestInterviewDate) {
-      toast.error("마감일시는 면접 날짜보다 이전이어야 합니다.")
+    // 가장 빠른 면접 시작 시간 확인 (날짜 + 시간 조합)
+    let earliestInterviewDateTime = Number.MAX_SAFE_INTEGER
+    
+    availableTimes.forEach(time => {
+      if (time.slots.length > 0) {
+        const earliestSlot = time.slots.reduce((earliest, current) => {
+          const currentMinutes = timeToMinutes(current.start)
+          const earliestMinutes = timeToMinutes(earliest.start)
+          return currentMinutes < earliestMinutes ? current : earliest
+        })
+        
+        // 날짜와 시간을 조합해서 정확한 DateTime 계산
+        const interviewDate = new Date(time.date)
+        const [hours, minutes] = earliestSlot.start.split(':').map(Number)
+        interviewDate.setHours(hours, minutes, 0, 0)
+        
+        if (interviewDate.getTime() < earliestInterviewDateTime) {
+          earliestInterviewDateTime = interviewDate.getTime()
+        }
+      }
+    })
+    
+    if (deadlineDate.getTime() >= earliestInterviewDateTime) {
+      toast.error("마감일시는 가장 빠른 면접 시작 시간보다 이전이어야 합니다.")
       return false
     }
     
@@ -250,6 +330,17 @@ export default function CreateInterviewPage() {
 
   // 면접 이벤트 생성 핸들러
   const handleCreateInterviewEvent = async () => {
+    // 중복 클릭 방지
+    if (isCreating) {
+      return
+    }
+
+    // 플랜 제한 검사
+    if (!canCreateInterview(userPlan)) {
+      toast.error(getPlanLimitMessage(userPlan, 'interviews'))
+      return
+    }
+
     // 종합 유효성 검사
     if (!validateAll()) {
       return
@@ -260,8 +351,11 @@ export default function CreateInterviewPage() {
     try {
       const result = await createInterviewEvent({
         eventName: basicInfo.eventName,
+        description: basicInfo.description,
+        organizerName: basicInfo.organizerName,
         organizerEmail: basicInfo.organizerEmail,
         interviewLength: Number(basicInfo.interviewLength),
+        bufferTime: Number(basicInfo.bufferTime),
         simultaneousCount: Number(basicInfo.simultaneousCount),
         deadline: new Date(reviewSettings.deadline),
         reminderSettings: reviewSettings.reminderOptions,
@@ -273,15 +367,71 @@ export default function CreateInterviewPage() {
 
       if (result.success) {
         const actions = []
+        
+        // 이메일 발송 처리
         if (sendOptions.sendEmail) {
-          actions.push("초대 이메일 발송")
+          try {
+            // 유효한 후보자만 필터링
+            const emailCandidates = candidates
+              .filter(c => c.name.trim() && c.email.trim())
+              .map(c => ({ name: c.name.trim(), email: c.email.trim() }))
+            
+            const { valid, invalid } = validateEmailList(emailCandidates)
+            
+            if (valid.length > 0) {
+              const userEmailSettings = getUserEmailSettings()
+              const emailData = {
+                title: basicInfo.eventName,
+                organizerName: basicInfo.organizerName,
+                organizerEmail: basicInfo.organizerEmail,
+                deadlineDate: reviewSettings.deadline,
+                eventId: result.event.id,
+                fromName: userEmailSettings.fromName,
+                fromEmail: userEmailSettings.fromEmail,
+                customTemplate: customEmailTemplate || undefined,
+              }
+              
+              console.log('Sending emails to:', valid)
+              const emailResult = await sendInterviewInviteEmails(valid, emailData)
+              console.log('Email send result:', emailResult)
+              
+              if (emailResult.success) {
+                actions.push(`초대 이메일 발송 (${emailResult.sent}명)`)
+                console.log('All emails sent successfully')
+              } else {
+                actions.push(`초대 이메일 발송 (${emailResult.sent}명 성공, ${emailResult.failed}명 실패)`)
+                if (emailResult.errors.length > 0) {
+                  console.error('Email send errors:', emailResult.errors)
+                  // 에러 상세 정보를 토스트로 표시
+                  emailResult.errors.forEach(error => {
+                    toast.error(`${error.email}: ${error.error}`)
+                  })
+                }
+              }
+            }
+            
+            if (invalid.length > 0) {
+              toast.warning(`${invalid.length}명의 유효하지 않은 이메일 주소가 발견되어 메일을 발송하지 않았습니다.`)
+            }
+          } catch (emailError) {
+            console.error('Email sending failed:', emailError)
+            toast.error('이메일 발송 중 오류가 발생했습니다.')
+          }
         }
+        
         if (sendOptions.generateLink && result.shareToken) {
           actions.push("공유 링크 생성")
         }
 
         if (result.shareToken) {
           console.log("공유 링크:", `${window.location.origin}/respond/${result.shareToken}`)
+        }
+
+        // 성공 메시지 표시
+        if (actions.length > 0) {
+          toast.success(`면접 이벤트가 성공적으로 생성되었습니다!\n\n완료된 작업:\n• ${actions.join("\n• ")}`)
+        } else {
+          toast.success('면접 이벤트가 성공적으로 생성되었습니다!')
         }
 
         // 대시보드로 이동
@@ -398,6 +548,10 @@ export default function CreateInterviewPage() {
       return false
     }
     
+    if (!basicInfo.organizerName.trim()) {
+      return false
+    }
+    
     if (!basicInfo.organizerEmail.trim()) {
       return false
     }
@@ -466,7 +620,11 @@ export default function CreateInterviewPage() {
   }
 
   const addCandidate = () => {
-    setCandidates((prev) => [...prev, { name: "", phone: "", email: "" }])
+    if (!canAddCandidates(userPlan, candidates.length)) {
+      toast.error(getPlanLimitMessage(userPlan, 'candidates'))
+      return
+    }
+    setCandidates((prev) => [{ name: "", phone: "", email: "" }, ...prev])
   }
 
   const updateCandidate = (index: number, field: keyof Candidate, value: string) => {
@@ -477,50 +635,149 @@ export default function CreateInterviewPage() {
     setCandidates((prev) => prev.filter((_, i) => i !== index))
   }
 
+  const handleEmailTemplateSave = (template: CustomEmailTemplate) => {
+    setCustomEmailTemplate(template)
+    toast.success('이메일 템플릿이 저장되었습니다.')
+  }
+
   const handleCSVUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (!file) return
 
+    // 파일 크기 제한 (2MB)
+    if (file.size > 2 * 1024 * 1024) {
+      toast.error("파일 크기는 2MB 이하여야 합니다.")
+      return
+    }
+
+    // 파일 확장자 확인
+    if (!file.name.toLowerCase().endsWith('.csv')) {
+      toast.error("CSV 파일만 업로드 가능합니다.")
+      return
+    }
+
     const reader = new FileReader()
     reader.onload = (e) => {
-      const text = e.target?.result as string
-      const lines = text.split("\n").filter((line) => line.trim())
-      const headers = lines[0].split(",").map((h) => h.trim().toLowerCase())
-
-      const newCandidates: Candidate[] = []
-      for (let i = 1; i < lines.length; i++) {
-        const values = lines[i].split(",").map((v) => v.trim())
-        const candidate: Candidate = { name: "", phone: "", email: "" }
-
-        headers.forEach((header, index) => {
-          if (header.includes("name") || header.includes("이름")) {
-            candidate.name = values[index] || ""
-          } else if (header.includes("phone") || header.includes("전화")) {
-            candidate.phone = values[index] || ""
-          } else if (header.includes("email") || header.includes("이메일")) {
-            candidate.email = values[index] || ""
-          }
-        })
-
-        if (candidate.name && candidate.email) {
-          newCandidates.push(candidate)
+      try {
+        const text = e.target?.result as string
+        const lines = text.split("\n").filter((line) => line.trim())
+        
+        if (lines.length < 2) {
+          toast.error("CSV 파일에 데이터가 없습니다.")
+          return
         }
-      }
 
-      setCandidates((prev) => [...prev, ...newCandidates])
+        const headers = lines[0].split(",").map((h) => h.trim().toLowerCase())
+        
+        // 지원되는 헤더 패턴 정의 (문서화된 조건에 맞춤)
+        const nameHeaders = ['name', '이름']
+        const emailHeaders = ['email', '이메일', '메일']
+        const phoneHeaders = ['phone', '전화', '휴대폰', 'mobile', '전화번호', '휴대폰번호', '번호']
+        
+        // 헤더 검증 - 정확한 매칭
+        const hasName = headers.some(h => nameHeaders.includes(h))
+        const hasEmail = headers.some(h => emailHeaders.includes(h))
+        
+        if (!hasName || !hasEmail) {
+          toast.error(`CSV 파일에 필수 컬럼이 없습니다.\n필요: 이름(${nameHeaders.join('/')}) + 이메일(${emailHeaders.join('/')})`)
+          return
+        }
+
+        const newCandidates: Candidate[] = []
+        const failedRows: number[] = []
+
+        // 플랜 제한 체크
+        const totalCandidatesAfterUpload = candidates.length + (lines.length - 1)
+        if (!canAddCandidates(userPlan, candidates.length, lines.length - 1)) {
+          toast.error(getPlanLimitMessage(userPlan, 'candidates') + ` (현재: ${candidates.length}명, 업로드: ${lines.length - 1}명)`)
+          return
+        }
+
+        for (let i = 1; i < lines.length; i++) {
+          const values = lines[i].split(",").map((v) => v.trim().replace(/"/g, ''))
+          const candidate: Candidate = { name: "", phone: "", email: "" }
+
+          headers.forEach((header, index) => {
+            const value = values[index] || ""
+            // 정확한 헤더 매칭 사용
+            if (nameHeaders.includes(header)) {
+              candidate.name = value
+            } else if (phoneHeaders.includes(header)) {
+              candidate.phone = value
+            } else if (emailHeaders.includes(header)) {
+              candidate.email = value
+            }
+          })
+
+          // 기본 검증
+          if (candidate.name.trim() && candidate.email.trim()) {
+            // 이메일 형식 검증
+            if (validateEmail(candidate.email)) {
+              newCandidates.push(candidate)
+            } else {
+              failedRows.push(i + 1)
+            }
+          } else {
+            failedRows.push(i + 1)
+          }
+        }
+
+        if (newCandidates.length === 0) {
+          toast.error("유효한 데이터가 없습니다. 이름과 올바른 이메일이 필요합니다.")
+          return
+        }
+
+        // 중복 이메일 제거
+        const existingEmails = candidates.map(c => c.email.toLowerCase())
+        const uniqueNewCandidates = newCandidates.filter(candidate => 
+          !existingEmails.includes(candidate.email.toLowerCase())
+        )
+        
+        const duplicateCount = newCandidates.length - uniqueNewCandidates.length
+
+        // 기존 지원자 목록에 새 지원자들 추가
+        setCandidates((prev) => [...prev, ...uniqueNewCandidates])
+
+        // 결과 메시지
+        let message = `${uniqueNewCandidates.length}명의 지원자가 추가되었습니다.`
+        if (duplicateCount > 0) {
+          message += ` (${duplicateCount}명 중복 제외)`
+        }
+        if (failedRows.length > 0) {
+          message += ` (${failedRows.length}개 행 실패)`
+        }
+        
+        toast.success(message)
+
+        if (failedRows.length > 0) {
+          console.warn("실패한 행:", failedRows)
+        }
+
+      } catch (error) {
+        console.error("CSV 파일 처리 오류:", error)
+        toast.error("CSV 파일 처리 중 오류가 발생했습니다.")
+      }
     }
-    reader.readAsText(file)
+
+    reader.onerror = () => {
+      toast.error("파일 읽기에 실패했습니다.")
+    }
+
+    reader.readAsText(file, 'UTF-8')
+    
+    // 파일 입력 초기화 (같은 파일 재업로드 가능하도록)
+    event.target.value = ''
   }
 
   const getTotalSlots = () => {
     return availableTimes.reduce((total, time) => total + time.slots.length, 0)
   }
 
-  const getMaxCapacity = () => {
+  const getMaxInterviewSessions = () => {
     const interviewLength = typeof basicInfo.interviewLength === "number" ? basicInfo.interviewLength : 30
-    const simultaneousCount = typeof basicInfo.simultaneousCount === "number" ? basicInfo.simultaneousCount : 1
-
-    let totalCapacity = 0
+    const bufferTime = typeof basicInfo.bufferTime === "number" ? basicInfo.bufferTime : 10
+    const totalInterviewTime = interviewLength + bufferTime // 면접시간 + 버퍼시간
+    let totalSessions = 0
 
     // Process each date's time slots
     availableTimes.forEach(availableTime => {
@@ -549,15 +806,21 @@ export default function CreateInterviewPage() {
       }
       timeRanges.push(currentRange) // Add the last range
 
-      // Calculate capacity for each continuous time range
+      // Calculate sessions for each continuous time range (버퍼 시간 포함)
       timeRanges.forEach(range => {
         const totalMinutes = range.end - range.start
-        const possibleInterviews = Math.floor(totalMinutes / interviewLength)
-        totalCapacity += possibleInterviews * simultaneousCount
+        // 마지막 면접에는 버퍼 시간이 불필요하므로 (총시간 + 버퍼시간) / (면접시간 + 버퍼시간) 공식 사용
+        const possibleSessions = Math.floor((totalMinutes + bufferTime) / totalInterviewTime)
+        totalSessions += possibleSessions
       })
     })
 
-    return totalCapacity
+    return totalSessions
+  }
+
+  const getMaxCapacity = () => {
+    const simultaneousCount = typeof basicInfo.simultaneousCount === "number" ? basicInfo.simultaneousCount : 1
+    return getMaxInterviewSessions() * simultaneousCount
   }
 
   const formatTimeRanges = (slots: any[]) => {
@@ -660,7 +923,7 @@ export default function CreateInterviewPage() {
                       ? 'border-red-300 bg-red-50' 
                       : 'border-gray-300'
                   }`}
-                  placeholder="학부대학 CES 실리콘밸리 면접"
+                  placeholder="한시에 면접"
                 />
                 {touched.eventName && !basicInfo.eventName.trim() && (
                   <p className="mt-1 text-sm text-red-600">이벤트명을 입력해주세요.</p>
@@ -670,7 +933,22 @@ export default function CreateInterviewPage() {
                 )}
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">면접 설명</label>
+                <textarea
+                  value={basicInfo.description}
+                  onChange={(e) => {
+                    setBasicInfo((prev) => ({ ...prev, description: e.target.value }))
+                    setTouched((prev) => ({ ...prev, description: true }))
+                  }}
+                  onBlur={() => setTouched((prev) => ({ ...prev, description: true }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none"
+                  placeholder="면접에 대한 간단한 설명을 입력해주세요 (선택사항)"
+                  rows={3}
+                />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">면접 길이 (분) *</label>
                   <input
@@ -706,6 +984,30 @@ export default function CreateInterviewPage() {
                   {basicInfo.interviewLength && Number(basicInfo.interviewLength) > 300 && (
                     <p className="mt-1 text-sm text-red-600">면접 길이는 300분을 초과할 수 없습니다.</p>
                   )}
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">버퍼 시간 (분) *</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="60"
+                    value={basicInfo.bufferTime}
+                    onChange={(e) => {
+                      const value = e.target.value
+                      if (value === "") {
+                        setBasicInfo((prev) => ({ ...prev, bufferTime: 0 }))
+                      } else {
+                        const numValue = Number.parseInt(value)
+                        if (numValue >= 0 && numValue <= 60) {
+                          setBasicInfo((prev) => ({ ...prev, bufferTime: numValue }))
+                        }
+                      }
+                    }}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    placeholder="10"
+                  />
+                  <p className="mt-1 text-xs text-gray-500">면접 사이의 준비 시간 </p>
                 </div>
 
                 <div>
@@ -745,29 +1047,53 @@ export default function CreateInterviewPage() {
                 </div>
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">주최자 이메일 *</label>
-                <input
-                  type="email"
-                  value={basicInfo.organizerEmail}
-                  onChange={(e) => {
-                    setBasicInfo((prev) => ({ ...prev, organizerEmail: e.target.value }))
-                    setTouched((prev) => ({ ...prev, organizerEmail: true }))
-                  }}
-                  onBlur={() => setTouched((prev) => ({ ...prev, organizerEmail: true }))}
-                  className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${
-                    touched.organizerEmail && (!basicInfo.organizerEmail.trim() || (basicInfo.organizerEmail.trim() && !validateEmail(basicInfo.organizerEmail.trim())))
-                      ? 'border-red-300 bg-red-50'
-                      : 'border-gray-300'
-                  }`}
-                  placeholder="주최자 이메일 (자동 입력됨)"
-                />
-                {touched.organizerEmail && !basicInfo.organizerEmail.trim() && (
-                  <p className="mt-1 text-sm text-red-600">주최자 이메일을 입력해주세요.</p>
-                )}
-                {touched.organizerEmail && basicInfo.organizerEmail.trim() && !validateEmail(basicInfo.organizerEmail.trim()) && (
-                  <p className="mt-1 text-sm text-red-600">올바른 이메일 형식을 입력해주세요.</p>
-                )}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">담당자 이름 *</label>
+                  <input
+                    type="text"
+                    value={basicInfo.organizerName}
+                    onChange={(e) => {
+                      setBasicInfo((prev) => ({ ...prev, organizerName: e.target.value }))
+                      setTouched((prev) => ({ ...prev, organizerName: true }))
+                    }}
+                    onBlur={() => setTouched((prev) => ({ ...prev, organizerName: true }))}
+                    className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${
+                      touched.organizerName && !basicInfo.organizerName.trim()
+                        ? 'border-red-300 bg-red-50' 
+                        : 'border-gray-300'
+                    }`}
+                    placeholder="담당자 이름"
+                  />
+                  {touched.organizerName && !basicInfo.organizerName.trim() && (
+                    <p className="mt-1 text-sm text-red-600">담당자 이름을 입력해주세요.</p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">담당자 이메일 *</label>
+                  <input
+                    type="email"
+                    value={basicInfo.organizerEmail}
+                    onChange={(e) => {
+                      setBasicInfo((prev) => ({ ...prev, organizerEmail: e.target.value }))
+                      setTouched((prev) => ({ ...prev, organizerEmail: true }))
+                    }}
+                    onBlur={() => setTouched((prev) => ({ ...prev, organizerEmail: true }))}
+                    className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${
+                      touched.organizerEmail && (!basicInfo.organizerEmail.trim() || (basicInfo.organizerEmail.trim() && !validateEmail(basicInfo.organizerEmail.trim())))
+                        ? 'border-red-300 bg-red-50'
+                        : 'border-gray-300'
+                    }`}
+                    placeholder="담당자 이메일 (자동 입력됨)"
+                  />
+                  {touched.organizerEmail && !basicInfo.organizerEmail.trim() && (
+                    <p className="mt-1 text-sm text-red-600">담당자 이메일을 입력해주세요.</p>
+                  )}
+                  {touched.organizerEmail && basicInfo.organizerEmail.trim() && !validateEmail(basicInfo.organizerEmail.trim()) && (
+                    <p className="mt-1 text-sm text-red-600">올바른 이메일 형식을 입력해주세요.</p>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -792,13 +1118,15 @@ export default function CreateInterviewPage() {
               {/* Calendar */}
               <div className="lg:col-span-1">
                 <h3 className="text-lg font-semibold text-gray-900 mb-4">날짜 선택</h3>
-                <CalendarGrid
-                  currentMonth={currentMonth}
-                  selectedDates={availableTimes.map((time) => time.date)}
-                  onDateSelect={handleDateSelect}
-                  onMonthNavigate={handleMonthNavigate}
-                  size="compact"
-                />
+                {currentMonth && (
+                  <CalendarGrid
+                    currentMonth={currentMonth}
+                    selectedDates={availableTimes.map((time) => time.date)}
+                    onDateSelect={handleDateSelect}
+                    onMonthNavigate={handleMonthNavigate}
+                    size="compact"
+                  />
+                )}
 
                 <div className="mt-6 p-4 bg-gray-50 rounded-lg">
                   <h4 className="text-sm font-semibold text-gray-900 mb-3">시간 범위 설정</h4>
@@ -933,6 +1261,14 @@ export default function CreateInterviewPage() {
                   </div>
 
                   <div className="flex items-center gap-3">
+                    <Clock className="w-5 h-5 text-orange-500" />
+                    <div>
+                      <p className="text-sm font-medium text-gray-700">최대 면접 진행</p>
+                      <p className="text-lg font-semibold text-gray-900">{getMaxInterviewSessions()}회</p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3">
                     <Users className="w-5 h-5 text-purple-500" />
                     <div>
                       <p className="text-sm font-medium text-gray-700">최대 수용 인원</p>
@@ -988,14 +1324,28 @@ export default function CreateInterviewPage() {
               <p className="text-gray-600">면접 대상자들을 등록해주세요.</p>
             </div>
 
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-6">
               <h3 className="text-lg font-semibold text-gray-900 mb-3">CSV 파일 업로드</h3>
               <p className="text-sm text-gray-600 mb-4">
-                이름, 전화번호, 이메일 컬럼이 포함된 CSV 파일을 업로드하세요.
+                여러 지원자를 한번에 등록하려면 CSV 파일을 업로드하세요. 업로드된 데이터는 아래 수기 입력 칸에 자동으로 추가됩니다.
               </p>
-              <label className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 rounded-lg cursor-pointer hover:bg-gray-50 transition-colors">
+              
+              <div className="mb-4 p-3 bg-white rounded-lg border border-blue-100">
+                <h4 className="text-sm font-medium text-gray-900 mb-2">CSV 파일 형식 예시:</h4>
+                <div className="text-xs font-mono bg-gray-100 p-2 rounded border overflow-x-auto">
+                  <div className="text-gray-600">이름,이메일,전화번호</div>
+                  <div className="text-gray-800">홍길동,hong@example.com,010-1234-5678</div>
+                  <div className="text-gray-800">김철수,kim@example.com,010-9876-5432</div>
+                </div>
+                <p className="text-xs text-gray-500 mt-2">
+                  ✓ 헤더 지원: name/이름, email/이메일/메일, phone/전화/휴대폰/mobile<br/>
+                  ✓ 최대 파일 크기: 2MB | ✓ 중복 이메일 자동 제거
+                </p>
+              </div>
+
+              <label className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 rounded-lg cursor-pointer hover:bg-gray-50 transition-colors shadow-sm">
                 <Upload className="w-4 h-4" />
-                <span className="text-sm font-medium">파일 선택</span>
+                <span className="text-sm font-medium">CSV 파일 선택</span>
                 <input type="file" accept=".csv" onChange={handleCSVUpload} className="hidden" />
               </label>
             </div>
@@ -1018,9 +1368,13 @@ export default function CreateInterviewPage() {
                   <p className="text-sm">CSV 파일을 업로드하거나 수기로 추가해주세요.</p>
                 </div>
               ) : (
-                <div className="space-y-4">
+                <div className={`${candidates.length > 10 ? 'border border-gray-200 rounded-lg bg-gray-50' : ''}`}>
+                  <div className="flex items-center justify-between mb-4 p-3">
+
+                  </div>
+                  <div className="space-y-4 max-h-80 overflow-y-auto border border-gray-200 rounded-lg p-4 bg-white">
                   {candidates.map((candidate, index) => (
-                    <div key={index} className="p-4 bg-gray-50 rounded-lg space-y-3">
+                    <div key={index} className={`p-4 rounded-lg space-y-3 ${candidates.length > 10 ? 'bg-white border border-gray-100' : 'bg-gray-50'}`}>
                       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                         <div>
                           <input
@@ -1079,6 +1433,7 @@ export default function CreateInterviewPage() {
                       </div>
                     </div>
                   ))}
+                  </div>
                 </div>
               )}
             </div>
@@ -1123,7 +1478,7 @@ export default function CreateInterviewPage() {
                     type="datetime-local"
                     value={reviewSettings.deadline}
                     onChange={(e) => setReviewSettings((prev) => ({ ...prev, deadline: e.target.value }))}
-                    min={new Date().toISOString().slice(0, 16)}
+                    min={minDateTime}
                     className={`w-full px-4 py-3 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white shadow-sm transition-all duration-200 hover:border-gray-400 focus:shadow-md text-gray-900 font-medium
                       [&::-webkit-calendar-picker-indicator]:opacity-100 
                       [&::-webkit-calendar-picker-indicator]:cursor-pointer
@@ -1149,15 +1504,15 @@ export default function CreateInterviewPage() {
                       [&::-webkit-datetime-edit-minute-field]:bg-blue-50
                       [&::-webkit-datetime-edit-minute-field]:rounded
                       [&::-webkit-datetime-edit-minute-field]:px-1 ${
-                      reviewSettings.deadline && new Date(reviewSettings.deadline) <= new Date()
+                      reviewSettings.deadline && typeof window !== 'undefined' && new Date(reviewSettings.deadline) <= new Date()
                         ? 'border-red-300 bg-red-50'
                         : 'border-gray-300'
                     }`}
                   />
-                  {reviewSettings.deadline && new Date(reviewSettings.deadline) <= new Date() && (
+                  {reviewSettings.deadline && typeof window !== 'undefined' && new Date(reviewSettings.deadline) <= new Date() && (
                     <p className="mt-1 text-sm text-red-600">마감일시는 현재 시점보다 미래여야 합니다.</p>
                   )}
-                  {reviewSettings.deadline && availableTimes.length > 0 && (() => {
+                  {reviewSettings.deadline && availableTimes.length > 0 && typeof window !== 'undefined' && (() => {
                     const deadlineDate = new Date(reviewSettings.deadline)
                     const earliestInterviewDate = Math.min(...availableTimes.map(time => time.date.getTime()))
                     return deadlineDate.getTime() >= earliestInterviewDate && (
@@ -1225,10 +1580,20 @@ export default function CreateInterviewPage() {
                     <p className="text-sm text-gray-600">이벤트명</p>
                     <p className="font-medium text-gray-900">{basicInfo.eventName}</p>
                   </div>
-                  <div className="grid grid-cols-2 gap-4">
+                  {basicInfo.description && (
+                    <div>
+                      <p className="text-sm text-gray-600">설명</p>
+                      <p className="font-medium text-gray-900">{basicInfo.description}</p>
+                    </div>
+                  )}
+                  <div className="grid grid-cols-3 gap-4">
                     <div>
                       <p className="text-sm text-gray-600">면접 길이</p>
                       <p className="font-medium text-gray-900">{basicInfo.interviewLength}분</p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-600">버퍼 시간</p>
+                      <p className="font-medium text-gray-900">{basicInfo.bufferTime}분</p>
                     </div>
                     <div>
                       <p className="text-sm text-gray-600">동시 인원</p>
@@ -1252,18 +1617,95 @@ export default function CreateInterviewPage() {
               <div className="bg-white border border-gray-200 rounded-lg p-6">
                 <h3 className="text-lg font-semibold text-gray-900 mb-4">가용 시간</h3>
                 <div className="space-y-3">
-                  <div className="grid grid-cols-3 gap-4 text-center">
+                  <div className="grid grid-cols-3 gap-4 text-center mb-4">
                     <div>
                       <p className="text-2xl font-bold text-blue-600">{availableTimes.length}</p>
                       <p className="text-sm text-gray-600">날짜</p>
                     </div>
                     <div>
-                      <p className="text-2xl font-bold text-green-600">{getTotalSlots()}</p>
-                      <p className="text-sm text-gray-600">슬롯</p>
+                      <p className="text-2xl font-bold text-green-600">{getMaxInterviewSessions()}</p>
+                      <p className="text-sm text-gray-600">면접 횟수</p>
                     </div>
                     <div>
                       <p className="text-2xl font-bold text-purple-600">{getMaxCapacity()}</p>
                       <p className="text-sm text-gray-600">최대 수용</p>
+                    </div>
+                  </div>
+                  
+                  {/* 설정된 면접 시간대 목록 */}
+                  <div className="border-t border-gray-200 pt-4">
+                    <p className="text-sm text-gray-600 mb-2">면접 진행 시간대:</p>
+                    <div className="max-h-40 overflow-y-auto space-y-2">
+                      {availableTimes
+                        .sort((a, b) => a.date.getTime() - b.date.getTime())
+                        .map((availableTime, index) => {
+                          // 시간 순서로 정렬된 슬롯들
+                          const sortedSlots = availableTime.slots
+                            .map(slot => ({ start: slot.start, startMinutes: timeToMinutes(slot.start) }))
+                            .sort((a, b) => a.startMinutes - b.startMinutes)
+
+                          // 연속된 슬롯들을 그룹화
+                          const timeRanges: { start: number, end: number }[] = []
+                          if (sortedSlots.length > 0) {
+                            let currentRange = { start: sortedSlots[0].startMinutes, end: sortedSlots[0].startMinutes + 30 }
+
+                            for (let i = 1; i < sortedSlots.length; i++) {
+                              const slot = sortedSlots[i]
+                              
+                              if (slot.startMinutes === currentRange.end) {
+                                // 연속된 슬롯 - 범위 확장
+                                currentRange.end = slot.startMinutes + 30
+                              } else {
+                                // 비연속 슬롯 - 현재 범위 저장하고 새 범위 시작
+                                timeRanges.push(currentRange)
+                                currentRange = { start: slot.startMinutes, end: slot.startMinutes + 30 }
+                              }
+                            }
+                            timeRanges.push(currentRange)
+                          }
+
+                          // 각 연속된 시간 범위에 대해 면접 시간대 생성
+                          const interviewTimes: string[] = []
+                          const interviewLength = typeof basicInfo.interviewLength === "number" ? basicInfo.interviewLength : 30
+                          const bufferTime = typeof basicInfo.bufferTime === "number" ? basicInfo.bufferTime : 10
+                          const totalInterviewTime = interviewLength + bufferTime
+
+                          timeRanges.forEach(range => {
+                            const totalMinutes = range.end - range.start
+                            const possibleSessions = Math.floor((totalMinutes + bufferTime) / totalInterviewTime)
+                            
+                            // 각 면접 세션의 시작/종료 시간 계산
+                            for (let session = 0; session < possibleSessions; session++) {
+                              const sessionStartMinutes = range.start + (session * totalInterviewTime)
+                              const sessionEndMinutes = sessionStartMinutes + interviewLength
+                              
+                              const startHour = Math.floor(sessionStartMinutes / 60)
+                              const startMinute = sessionStartMinutes % 60
+                              const endHour = Math.floor(sessionEndMinutes / 60)
+                              const endMinute = sessionEndMinutes % 60
+                              
+                              const startTime = `${startHour.toString().padStart(2, "0")}:${startMinute.toString().padStart(2, "0")}`
+                              const endTime = `${endHour.toString().padStart(2, "0")}:${endMinute.toString().padStart(2, "0")}`
+                              
+                              interviewTimes.push(`${startTime} - ${endTime}`)
+                            }
+                          })
+
+                          return (
+                            <div key={index} className="text-xs bg-gray-50 rounded p-2">
+                              <p className="font-medium text-gray-900">
+                                {formatDate(availableTime.date)}
+                              </p>
+                              <div className="flex flex-wrap gap-1 mt-1">
+                                {interviewTimes.map((timeRange, timeIndex) => (
+                                  <span key={timeIndex} className="inline-block bg-green-100 text-green-800 px-2 py-0.5 rounded text-xs">
+                                    {timeRange}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )
+                        })}
                     </div>
                   </div>
                 </div>
@@ -1295,17 +1737,30 @@ export default function CreateInterviewPage() {
               <div className="bg-white border border-gray-200 rounded-lg p-6">
                 <h3 className="text-lg font-semibold text-gray-900 mb-4">발송 옵션</h3>
                 <div className="space-y-3">
-                  <label className="flex items-center">
-                    <input
-                      type="checkbox"
-                      checked={sendOptions.sendEmail}
-                      onChange={(e) =>
-                        setSendOptions((prev) => ({ ...prev, sendEmail: e.target.checked }))
-                      }
-                      className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                    />
-                    <span className="ml-2 text-sm text-gray-700">지원자에게 초대 이메일 발송</span>
-                  </label>
+                  <div className="flex items-center justify-between">
+                    <label className="flex items-center">
+                      <input
+                        type="checkbox"
+                        checked={sendOptions.sendEmail}
+                        onChange={(e) =>
+                          setSendOptions((prev) => ({ ...prev, sendEmail: e.target.checked }))
+                        }
+                        disabled={false}
+                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      <span className="ml-2 text-sm text-gray-700">
+                        지원자에게 초대 이메일 발송
+                      </span>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setShowEmailPreview(true)}
+                      className="flex items-center gap-1 px-3 py-1 text-sm text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors"
+                    >
+                      <Eye className="w-4 h-4" />
+                      미리보기
+                    </button>
+                  </div>
                   <label className="flex items-center">
                     <input
                       type="checkbox"
@@ -1333,7 +1788,14 @@ export default function CreateInterviewPage() {
                 disabled={isCreating}
                 className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 disabled:cursor-not-allowed text-white font-medium py-3 px-4 rounded-lg transition-colors flex items-center justify-center gap-2"
               >
-                {isCreating ? "생성 중..." : "면접 이벤트 생성"}
+                {isCreating ? (
+                  <>
+                    <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                    생성 중...
+                  </>
+                ) : (
+                  "면접 이벤트 생성"
+                )}
               </button>
             </div>
           </div>
@@ -1409,6 +1871,32 @@ export default function CreateInterviewPage() {
         </AnimatePresence>
       </div>
     </div>
+
+    {/* Email Preview Modal */}
+    {showEmailPreview && (
+      <EmailPreviewModal
+        isOpen={showEmailPreview}
+        onClose={() => setShowEmailPreview(false)}
+        onSave={handleEmailTemplateSave}
+        interviewData={{
+          eventName: basicInfo.eventName,
+          organizerName: user?.user_metadata?.name || user?.user_metadata?.full_name || user?.email?.split('@')[0] || '담당자',
+          organizerEmail: basicInfo.organizerEmail,
+          deadlineDate: new Date(reviewSettings.deadline).toLocaleString('ko-KR', {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            weekday: 'long',
+          }),
+          eventId: 'preview-event-id'
+        }}
+        candidateName={candidates[0]?.name || '김지원'}
+        fromName={getUserEmailSettings().fromName}
+        fromEmail={getUserEmailSettings().fromEmail}
+      />
+    )}
     </ProtectedRoute>
   )
 }

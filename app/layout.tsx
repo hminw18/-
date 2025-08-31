@@ -6,9 +6,9 @@ import { Toaster } from 'react-hot-toast'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'v0 App',
-  description: 'Created with v0',
-  generator: 'v0.app',
+  title: '한시에',
+  description: '면접 일정 조율 플랫폼',
+  generator: '한시에',
 }
 
 export default function RootLayout({
@@ -19,6 +19,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <head>
+        <link rel="icon" href="/hanseeicon.png" />
         <style>{`
 html {
   font-family: ${GeistSans.style.fontFamily};

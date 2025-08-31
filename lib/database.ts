@@ -1,4 +1,4 @@
-import { supabase } from './supabase'
+import { supabase, supabaseAdmin } from './supabase'
 import type { Database } from './supabase'
 import { formatDateForDB } from '../utils/calendar'
 import { optimizeInterviewSchedule } from '../utils/schedule-optimizer'
@@ -11,8 +11,11 @@ type DbCandidate = Database['public']['Tables']['candidates']['Insert']
 // 면접 이벤트 생성
 export async function createInterviewEvent(eventData: {
   eventName: string
+  description?: string
+  organizerName: string
   organizerEmail: string
   interviewLength: number
+  bufferTime: number
   simultaneousCount: number
   deadline: Date
   reminderSettings: {
@@ -53,8 +56,11 @@ export async function createInterviewEvent(eventData: {
       .from('interview_events')
       .insert({
         event_name: eventData.eventName,
+        description: eventData.description,
+        organizer_name: eventData.organizerName,
         organizer_email: eventData.organizerEmail,
         interview_length: eventData.interviewLength,
+        buffer_time: eventData.bufferTime,
         simultaneous_count: eventData.simultaneousCount,
         deadline: eventData.deadline.toISOString(),
         reminder_settings: eventData.reminderSettings,
@@ -152,8 +158,14 @@ export async function getInterviewEvent(eventId: string) {
 
 // 지원자 응답 페이지용 이벤트 조회 (공개 토큰 기반)
 export async function getInterviewEventByShareToken(shareToken: string) {
+  console.log('=== DATABASE DEBUG START ===')
   console.log('getInterviewEventByShareToken called with:', shareToken)
+  console.log('ShareToken type:', typeof shareToken)
+  console.log('ShareToken length:', shareToken?.length)
+  console.log('Supabase client status:', supabase ? 'initialized' : 'not initialized')
+  
   try {
+    console.log('Making Supabase query...')
     const { data: event, error: eventError } = await supabase
       .from('interview_events')
       .select(`
@@ -167,7 +179,11 @@ export async function getInterviewEventByShareToken(shareToken: string) {
       .eq('share_token', shareToken)
       .single()
     
-    console.log('Supabase query result:', { event, eventError })
+    console.log('Supabase query result:')
+    console.log('- Event data:', event)
+    console.log('- Event error:', eventError)
+    console.log('- Error code:', eventError?.code)
+    console.log('- Error message:', eventError?.message)
 
     if (eventError) {
       // PGRST116은 "No rows returned" 에러 코드
@@ -181,18 +197,25 @@ export async function getInterviewEventByShareToken(shareToken: string) {
     }
 
     if (!event) {
+      console.log('Event is null or undefined')
+      console.log('=== DATABASE DEBUG END ===')
       return {
         success: false,
         error: '이벤트를 찾을 수 없습니다.'
       }
     }
 
+    console.log('Success! Returning event:', event.event_name)
+    console.log('=== DATABASE DEBUG END ===')
     return {
       success: true,
       event
     }
   } catch (error) {
     console.error('Error fetching interview event by share token:', error)
+    console.error('Error type:', typeof error)
+    console.error('Error constructor:', error?.constructor?.name)
+    console.log('=== DATABASE DEBUG END ===')
     return {
       success: false,
       error: error?.message || '이벤트를 불러오는 중 오류가 발생했습니다.'
@@ -510,19 +533,31 @@ export async function generateInterviewSchedule(eventId: string) {
       candidates,
       availableSlots,
       event.interview_length,
+      event.buffer_time,
       event.simultaneous_count
     )
 
     // 5. 스케줄 결과를 데이터베이스에 저장
-    const scheduledInterviews = optimizationResult.assignments.map(assignment => ({
-      event_id: eventId,
-      candidate_id: assignment.candidate.id,
-      scheduled_date: assignment.slot.date,
-      scheduled_start_time: assignment.slot.startTime,
-      scheduled_end_time: assignment.slot.endTime,
-      session_id: assignment.sessionId,
-      status: 'scheduled' as const
-    }))
+    const scheduledInterviews = optimizationResult.assignments.map(assignment => {
+      // 면접 길이에 따른 실제 종료 시간 계산
+      const startTime = assignment.slot.startTime
+      const [startHour, startMinute] = startTime.split(':').map(Number)
+      const startDate = new Date()
+      startDate.setHours(startHour, startMinute, 0, 0)
+      
+      const endDate = new Date(startDate.getTime() + event.interview_length * 60000)
+      const endTime = `${endDate.getHours().toString().padStart(2, '0')}:${endDate.getMinutes().toString().padStart(2, '0')}`
+      
+      return {
+        event_id: eventId,
+        candidate_id: assignment.candidate.id,
+        scheduled_date: assignment.slot.date,
+        scheduled_start_time: startTime,
+        scheduled_end_time: endTime,
+        session_id: assignment.sessionId,
+        status: 'scheduled' as const
+      }
+    })
 
     // 기존 스케줄 삭제
     const { error: deleteError } = await supabase
@@ -601,6 +636,229 @@ export async function getScheduledInterviews(eventId: string) {
       success: false,
       error: error?.message || '스케줄 조회 중 오류가 발생했습니다.',
       data: []
+    }
+  }
+}
+
+// ===== 결제 관련 함수들 =====
+
+// 결제 정보 생성
+export async function createPayment(paymentData: {
+  userId: string
+  orderId: string
+  amount: number
+  goodsName: string
+  buyerName: string
+  buyerEmail: string
+  buyerTel?: string
+  mallReserved?: string
+}) {
+  try {
+    if (!supabaseAdmin) {
+      throw new Error('Supabase admin client not configured')
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('payments')
+      .insert([{
+        user_id: paymentData.userId,
+        order_id: paymentData.orderId,
+        amount: paymentData.amount,
+        goods_name: paymentData.goodsName,
+        buyer_name: paymentData.buyerName,
+        buyer_email: paymentData.buyerEmail,
+        buyer_tel: paymentData.buyerTel,
+        mall_reserved: paymentData.mallReserved,
+        status: 'pending'
+      }])
+      .select()
+      .single()
+
+    if (error) throw error
+
+    return {
+      success: true,
+      payment: data
+    }
+  } catch (error) {
+    console.error('Error creating payment:', error)
+    return {
+      success: false,
+      error: error?.message || '결제 정보 생성 중 오류가 발생했습니다.'
+    }
+  }
+}
+
+// 결제 정보 업데이트 (승인 완료시)
+export async function updatePaymentStatus(
+  orderId: string, 
+  updateData: {
+    tid?: string
+    status: 'approved' | 'failed' | 'cancelled'
+    authDate?: string
+    authTime?: string
+    cardCode?: string
+    cardName?: string
+    resultCode?: string
+    resultMsg?: string
+    signature?: string
+    rawResponse?: any
+  }
+) {
+  try {
+    if (!supabaseAdmin) {
+      throw new Error('Supabase admin client not configured')
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('payments')
+      .update({
+        tid: updateData.tid,
+        status: updateData.status,
+        auth_date: updateData.authDate ? new Date(updateData.authDate) : null,
+        auth_time: updateData.authTime,
+        card_code: updateData.cardCode,
+        card_name: updateData.cardName,
+        result_code: updateData.resultCode,
+        result_msg: updateData.resultMsg,
+        signature: updateData.signature,
+        raw_response: updateData.rawResponse,
+        updated_at: new Date()
+      })
+      .eq('order_id', orderId)
+      .select()
+      .single()
+
+    if (error) throw error
+
+    return {
+      success: true,
+      payment: data
+    }
+  } catch (error) {
+    console.error('Error updating payment:', error)
+    return {
+      success: false,
+      error: error?.message || '결제 정보 업데이트 중 오류가 발생했습니다.'
+    }
+  }
+}
+
+// 결제 정보 조회 (주문번호로)
+export async function getPaymentByOrderId(orderId: string) {
+  try {
+    if (!supabaseAdmin) {
+      throw new Error('Supabase admin client not configured')
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('payments')
+      .select('*')
+      .eq('order_id', orderId)
+      .single()
+
+    if (error) throw error
+
+    return {
+      success: true,
+      payment: data
+    }
+  } catch (error) {
+    console.error('Error fetching payment:', error)
+    return {
+      success: false,
+      error: error?.message || '결제 정보 조회 중 오류가 발생했습니다.',
+      payment: null
+    }
+  }
+}
+
+// 사용자 결제 내역 조회
+export async function getUserPayments(userId: string) {
+  try {
+    if (!supabaseAdmin) {
+      throw new Error('Supabase admin client not configured')
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('payments')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+
+    if (error) throw error
+
+    return {
+      success: true,
+      payments: data || []
+    }
+  } catch (error) {
+    console.error('Error fetching user payments:', error)
+    return {
+      success: false,
+      error: error?.message || '결제 내역 조회 중 오류가 발생했습니다.',
+      payments: []
+    }
+  }
+}
+
+// 사용자 플랜 상태 확인 (결제 승인된 Pro 플랜이 있는지)
+export async function getUserPlanStatus(userId: string) {
+  try {
+    if (!supabaseAdmin) {
+      throw new Error('Supabase admin client not configured')
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('payments')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('status', 'approved')
+      .ilike('goods_name', '%Pro%')
+      .order('created_at', { ascending: false })
+      .limit(1)
+
+    if (error) throw error
+
+    const hasProPlan = data && data.length > 0
+    
+    return {
+      success: true,
+      hasProPlan,
+      latestPayment: data?.[0] || null
+    }
+  } catch (error) {
+    console.error('Error checking user plan status:', error)
+    return {
+      success: false,
+      error: error?.message || '플랜 상태 확인 중 오류가 발생했습니다.',
+      hasProPlan: false,
+      latestPayment: null
+    }
+  }
+}
+
+// 세션 장소 정보 업데이트
+export async function updateSessionLocation(sessionId: string, location: string) {
+  try {
+    const { data, error } = await supabase
+      .from('scheduled_interviews')
+      .update({ meeting_room: location })
+      .eq('session_id', sessionId)
+      .select()
+
+    if (error) throw error
+
+    return {
+      success: true,
+      message: '장소 정보가 성공적으로 업데이트되었습니다.',
+      data
+    }
+  } catch (error) {
+    console.error('Error updating session location:', error)
+    return {
+      success: false,
+      error: error?.message || '장소 정보 업데이트 중 오류가 발생했습니다.'
     }
   }
 }

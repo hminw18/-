@@ -70,7 +70,7 @@ export default function IdentityVerificationDialog({ isOpen, onClose, onVerify }
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
-          <p className="text-sm text-gray-600 mb-4">예약을 진행하기 위해 본인 확인이 필요합니다.</p>
+          <p className="text-sm text-gray-600 mb-4">면접 일정 선택을 위해 본인 확인이 필요합니다.</p>
 
           <div>
             <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-2">
