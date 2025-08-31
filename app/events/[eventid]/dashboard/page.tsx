@@ -217,18 +217,15 @@ export default function EventDashboardPage() {
   const [selectAll, setSelectAll] = useState(false)
   const [sessionLocations, setSessionLocations] = useState<{[sessionId: string]: string}>({})
   const [editingLocation, setEditingLocation] = useState<string | null>(null)
-  
-  // 리마인더 메일 관련 상태
-  const [showReminderPreview, setShowReminderPreview] = useState(false)
-  const [reminderType, setReminderType] = useState<"all" | "unresponded" | string>("unresponded")
-  const [reminderRecipients, setReminderRecipients] = useState<Array<{name: string, email: string}>>([])
-  const [isSendingReminder, setIsSendingReminder] = useState(false)
-  const [currentReminderRecipients, setCurrentReminderRecipients] = useState<Array<{name: string, email: string}>>([])  // 실제 모달 전달용
 
-  // 확정 메일 관련 상태
-  const [showConfirmationPreview, setShowConfirmationPreview] = useState(false)
-  const [confirmationData, setConfirmationData] = useState<ConfirmationData | null>(null)
-  const [confirmationRecipients, setConfirmationRecipients] = useState<Array<{name: string, email: string}>>([])
+  // 이메일 미리보기 관련 상태 통합
+  const [reminderPreview, setReminderPreview] = useState<{ recipients: Array<{name: string, email: string}> } | null>(null)
+  const [isSendingReminder, setIsSendingReminder] = useState(false)
+
+  const [confirmationPreview, setConfirmationPreview] = useState<{
+    data: ConfirmationData,
+    recipients: Array<{name: string, email: string}>
+  } | null>(null)
   const [isSendingConfirmation, setIsSendingConfirmation] = useState(false)
 
   // Format time ranges by merging consecutive slots
@@ -414,15 +411,15 @@ export default function EventDashboardPage() {
       return
     }
     
-    // 확정 메일 방식과 동일하게 직접 설정
-    setReminderRecipients(recipients)
-    setCurrentReminderRecipients(recipients)  // 즉시 사용할 수 있도록 별도 저장
-    setShowReminderPreview(true)
+    setReminderPreview({ recipients })
   }
 
   const handleReminderSend = async (customTemplate?: CustomEmailTemplate): Promise<void> => {
-    if (!event || reminderRecipients.length === 0) return
-    
+    if (!event || !reminderPreview) return
+
+    const recipients = reminderPreview.recipients
+    if (recipients.length === 0) return
+
     setIsSendingReminder(true)
     try {
       // customTemplate이 없으면 에러 발생시켜서 미리보기를 강제로 사용하게 함
@@ -444,11 +441,11 @@ export default function EventDashboardPage() {
       }
       
       console.log('Sending reminder with customTemplate:', customTemplate.subject)
-      const result = await sendReminderEmails(reminderRecipients, interviewData)
+      const result = await sendReminderEmails(recipients, interviewData)
       
       if (result.success) {
         toast.success(`${result.sent}명에게 리마인드 메일을 발송했습니다!`)
-        setShowReminderPreview(false)
+        setReminderPreview(null)
       } else {
         toast.error(`메일 발송에 실패했습니다: ${result.failed}명 실패`)
       }
@@ -512,27 +509,36 @@ export default function EventDashboardPage() {
     }
 
     // 확정 메일 데이터 설정
-    setConfirmationData({
-      title: event.eventName,
-      organizerName: event.organizerName,
-      organizerEmail: event.organizerEmail,
-      scheduledDate,
-      scheduledTime,
-      meetingLocation: sessionLocations[sessionId] || undefined,
-      meetingLink: sampleInterview.meeting_link || undefined
+    setConfirmationPreview({
+      data: {
+        title: event.eventName,
+        organizerName: event.organizerName,
+        organizerEmail: event.organizerEmail,
+        scheduledDate,
+        scheduledTime,
+        meetingLocation: sessionLocations[sessionId] || undefined,
+        meetingLink: sampleInterview.meeting_link || undefined
+      },
+      recipients
     })
-    setConfirmationRecipients(recipients)
-    setShowConfirmationPreview(true)
   }
 
   const handleConfirmationSend = async (customTemplate?: CustomEmailTemplate): Promise<void> => {
+    if (!confirmationPreview) {
+      console.error('❌ 확정메일 발송 실패 - 미리보기 데이터 없음')
+      toast.error('메일 발송에 필요한 정보가 없습니다.')
+      return
+    }
+
+    const { data: confirmationData, recipients: confirmationRecipients } = confirmationPreview
+
     console.log('🚀 확정메일 발송 시작:', {
       confirmationData,
       recipientsCount: confirmationRecipients.length,
       recipients: confirmationRecipients
     })
     
-    if (!confirmationData || confirmationRecipients.length === 0) {
+    if (confirmationRecipients.length === 0) {
       console.error('❌ 확정메일 발송 실패 - 데이터 없음:', { confirmationData, recipientsCount: confirmationRecipients.length })
       return
     }
@@ -598,7 +604,7 @@ export default function EventDashboardPage() {
         } else {
           toast.success(`확정 메일 발송 완료: 성공 ${successCount}명, 실패 ${failCount}명`)
         }
-        setShowConfirmationPreview(false)
+        setConfirmationPreview(null)
       } else {
         // 단일 세션 발송
         const result = await sendConfirmationEmails(confirmationRecipients, {
@@ -608,7 +614,7 @@ export default function EventDashboardPage() {
 
         if (result.success) {
           toast.success(`${result.sent}명에게 확정 메일을 발송했습니다!`)
-          setShowConfirmationPreview(false)
+          setConfirmationPreview(null)
         } else {
           toast.error(`메일 발송에 실패했습니다: ${result.failed}명 실패`)
         }
@@ -1181,19 +1187,19 @@ export default function EventDashboardPage() {
                       
                       const scheduledTime = `${firstInterview.scheduled_start_time.substring(0, 5)} - ${firstInterview.scheduled_end_time.substring(0, 5)}`
                       
-                      setConfirmationData({
-                        title: event.eventName,
-                        organizerName: event.organizerName,
-                        organizerEmail: event.organizerEmail,
-                        scheduledDate,
-                        scheduledTime,
-                        meetingLocation: sessionLocations[firstInterview.session_id] || undefined,
-                        meetingLink: firstInterview.meeting_link || undefined,
-                        isBulkSend: true
+                      setConfirmationPreview({
+                        data: {
+                          title: event.eventName,
+                          organizerName: event.organizerName,
+                          organizerEmail: event.organizerEmail,
+                          scheduledDate,
+                          scheduledTime,
+                          meetingLocation: sessionLocations[firstInterview.session_id] || undefined,
+                          meetingLink: firstInterview.meeting_link || undefined,
+                          isBulkSend: true
+                        },
+                        recipients: allRecipients
                       })
-                      
-                      setConfirmationRecipients(allRecipients)
-                      setShowConfirmationPreview(true)
                     }}
                     className="flex items-center gap-2 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors"
                   >
@@ -1315,10 +1321,10 @@ export default function EventDashboardPage() {
         />
 
         {/* Reminder Email Preview Modal */}
-        {event && (
+        {event && reminderPreview && (
           <EmailPreviewModal
-            isOpen={showReminderPreview}
-            onClose={() => setShowReminderPreview(false)}
+            isOpen={!!reminderPreview}
+            onClose={() => setReminderPreview(null)}
             onSave={handleReminderSend}
             interviewData={{
               eventName: event.eventName,
@@ -1328,26 +1334,24 @@ export default function EventDashboardPage() {
               eventId: event.id,
               shareToken: event.shareToken
             }}
-            candidateName={currentReminderRecipients[0]?.name || "지원자"}
             fromName={event.organizerName}
             fromEmail={event.organizerEmail}
             isReminder={true}
-            recipients={currentReminderRecipients}
+            recipients={reminderPreview.recipients}
           />
         )}
 
         {/* Confirmation Email Preview Modal */}
-        {event && confirmationData && (
+        {event && confirmationPreview && (
           <EmailPreviewModal
-            isOpen={showConfirmationPreview}
-            onClose={() => setShowConfirmationPreview(false)}
+            isOpen={!!confirmationPreview}
+            onClose={() => setConfirmationPreview(null)}
             onSave={handleConfirmationSend}
-            confirmationData={confirmationData}
-            candidateName={confirmationRecipients[0]?.name || "지원자"}
+            confirmationData={confirmationPreview.data}
             fromName={event.organizerName}
             fromEmail={event.organizerEmail}
             isConfirmation={true}
-            recipients={confirmationRecipients}
+            recipients={confirmationPreview.recipients}
           />
         )}
         

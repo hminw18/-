@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { X, Mail, Edit3, Eye, ChevronDown, ChevronUp } from 'lucide-react'
 import { getInterviewInviteEmailTemplate, getReminderEmailTemplate, getConfirmationEmailTemplate } from '../../lib/email-templates'
 
@@ -54,44 +54,12 @@ export default function EmailPreviewModal({
   const [isEditing, setIsEditing] = useState(false)
   const [previewMode, setPreviewMode] = useState<'html' | 'text'>('html')
   const [showAllRecipients, setShowAllRecipients] = useState(false)
-  
-  // 실제 수신자명 사용 (첫 번째 수신자 또는 기본값)
-  const actualCandidateName = recipients.length > 0 ? recipients[0].name : candidateName
-  
-  // 기본 템플릿 생성
-  const defaultTemplate = isConfirmation && confirmationData
-    ? getConfirmationEmailTemplate({
-        candidateName: actualCandidateName,
-        interviewTitle: confirmationData.title,
-        organizerName: confirmationData.organizerName,
-        organizerEmail: confirmationData.organizerEmail,
-        scheduledDate: confirmationData.scheduledDate,
-        scheduledTime: confirmationData.scheduledTime,
-        meetingLocation: confirmationData.meetingLocation,
-        meetingLink: confirmationData.meetingLink
-      })
-    : isReminder && interviewData
-    ? getReminderEmailTemplate({
-        candidateName: actualCandidateName,
-        interviewTitle: interviewData.eventName,
-        organizerName: interviewData.organizerName,
-        organizerEmail: interviewData.organizerEmail,
-        deadlineDate: interviewData.deadlineDate,
-        responseUrl: `${window.location.origin}/respond/${interviewData.shareToken || interviewData.eventId}`
-      })
-    : interviewData
-    ? getInterviewInviteEmailTemplate({
-        candidateName: actualCandidateName,
-        interviewTitle: interviewData.eventName,
-        organizerName: interviewData.organizerName,
-        organizerEmail: interviewData.organizerEmail,
-        deadlineDate: interviewData.deadlineDate,
-        responseUrl: `${window.location.origin}/respond/${interviewData.shareToken || interviewData.eventId}`
-      })
-    : { html: '', text: '' }
+  const [emailTemplate, setEmailTemplate] = useState<CustomEmailTemplate>({ subject: '', htmlContent: '', textContent: '' })
 
-  const [emailTemplate, setEmailTemplate] = useState<CustomEmailTemplate>(() => {
-    // 초기 템플릿을 함수로 생성하여 브라우저에서 확실히 실행되도록 함
+  useEffect(() => {
+    // Props가 변경될 때마다 이메일 템플릿을 다시 생성합니다.
+    const actualCandidateName = recipients.length > 0 ? recipients[0].name : candidateName
+
     const template = isConfirmation && confirmationData
       ? getConfirmationEmailTemplate({
           candidateName: actualCandidateName,
@@ -123,28 +91,36 @@ export default function EmailPreviewModal({
         })
       : { html: '', text: '' }
 
-    return {
-      subject: isConfirmation && confirmationData
-        ? `${confirmationData.title} - 면접 일정 확정 안내`
-        : isReminder && interviewData
-        ? `[리마인더] ${interviewData.eventName} - 면접 일정 선택 요청`
-        : interviewData
-        ? `${interviewData.eventName} - 면접 일정 선택 요청`
-        : '이메일 제목',
+    const subject = isConfirmation && confirmationData
+      ? `${confirmationData.title} - 면접 일정 확정 안내`
+      : isReminder && interviewData
+      ? `[리마인더] ${interviewData.eventName} - 면접 일정 선택 요청`
+      : interviewData
+      ? `${interviewData.eventName} - 면접 일정 선택 요청`
+      : '이메일 제목'
+
+    setEmailTemplate({
+      subject,
       htmlContent: template.html,
       textContent: template.text
-    }
-  })
+    })
 
-  console.log('🎭 EmailPreviewModal 디버깅:', {
-    isReminder,
-    isConfirmation,
-    candidateName,
+    console.log('🎭 EmailPreviewModal useEffect 디버깅:', {
+      isReminder,
+      isConfirmation,
+      candidateName,
+      recipientsCount: recipients.length,
+      firstRecipient: recipients[0],
+      actualCandidateName,
+      templateSubject: subject
+    })
+
+  }, [isOpen, recipients, candidateName, interviewData, confirmationData, isReminder, isConfirmation])
+
+  console.log('🎭 EmailPreviewModal 렌더링 디버깅:', {
     recipientsCount: recipients.length,
     firstRecipient: recipients[0],
-    actualCandidateName,
-    templateHtmlPreview: emailTemplate?.htmlContent?.substring(0, 500) + '...',
-    templateSubject: emailTemplate?.subject
+    htmlContentExists: !!emailTemplate?.htmlContent
   })
 
   const handleSave = () => {
